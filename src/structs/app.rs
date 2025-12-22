@@ -4,26 +4,29 @@ use iced::{
     widget::{Space, button, column, container, row, stack, text, text_input, toggler},
 };
 
-use crate::style::*;
 #[derive(Clone)]
 pub enum MessageApp {
     Increment,
-    AddCounter(String),
+    ChangeView(Screen),
+    AddCounter,
     DeleteCounter(usize),
-    WindowAddCounter,
-    ActivateCounter(usize),
-    CloseCounter(usize),
     ToggleCounter(usize),
-    TitleInputChanged(String),
-    ConfirmAddCounter,
+    TitleChanged(String),
     CancelAddCounter,
 }
+#[derive(Default, Clone)]
+enum Screen {
+    #[default]
+    List,
+    AddRecorder,
+}
+
 #[derive(Default)]
 pub struct App {
     recorders: Vec<Recorder>,
     window_add_counter: bool,
+    screen: Screen,
     new_recorder_title: String,
-    title_error: bool,
 }
 
 impl App {
@@ -31,53 +34,53 @@ impl App {
         App {
             recorders: Vec::new(),
             window_add_counter: false,
-            new_recorder_title: String::new(),
-            title_error: false,
+            screen: Screen::List,
+            new_recorder_title: "".to_string(),
         }
     }
 
     pub fn update(&mut self, message: MessageApp) {
         match message {
             MessageApp::Increment => self.update_all_counter(),
-            MessageApp::AddCounter(title) => self.add_recorder(title),
-            MessageApp::DeleteCounter(x) => self.delete_recorder(x),
-            MessageApp::WindowAddCounter => {
-                self.window_add_counter = true;
-                self.new_recorder_title.clear();
-                self.title_error = false;
+            MessageApp::AddCounter => {
+                self.add_recorder(self.new_recorder_title.clone());
+                self.go_to(Screen::List);
             }
-            MessageApp::ActivateCounter(x) => self.activate_recorder(x),
-            MessageApp::CloseCounter(x) => self.deactivate_recorder(x),
+            MessageApp::CancelAddCounter => {
+                self.go_to(Screen::List);
+            }
+            MessageApp::DeleteCounter(x) => self.delete_recorder(x),
+
             MessageApp::ToggleCounter(i) => {
                 if let Some(r) = self.recorders.get_mut(i) {
                     r.activate_deactivate();
                 }
             }
-            MessageApp::CancelAddCounter => {
-                self.window_add_counter = false;
-                self.new_recorder_title.clear();
-                self.title_error = false;
-            }
-            MessageApp::TitleInputChanged(value) => {
+            MessageApp::ChangeView(screen) => self.screen = screen,
+            MessageApp::TitleChanged(value) => {
                 self.new_recorder_title = value;
-                self.title_error = false;
-            }
-            MessageApp::ConfirmAddCounter => {
-                if self.new_recorder_title.trim().is_empty() {
-                    self.title_error = true;
-                } else {
-                    self.recorders
-                        .push(Recorder::new(self.new_recorder_title.clone()));
-                    self.window_add_counter = false;
-                    self.new_recorder_title.clear();
-                    self.title_error = false;
-                }
             }
         };
     }
 
+    fn go_to(&mut self, screen: Screen) -> () {
+        match screen {
+            Screen::AddRecorder => self.screen = screen,
+            Screen::List => {
+                self.reset_new_recorder_title();
+                self.screen = screen
+            }
+        }
+    }
+
+    pub fn reset_new_recorder_title(&mut self) -> () {
+        self.new_recorder_title = "".to_string()
+    }
     pub fn view(&self) -> Element<MessageApp> {
-        let main = self.main_view();
+        let main = match self.screen {
+            Screen::List => self.view_list(),
+            Screen::AddRecorder => self.view_add_recorder(),
+        };
 
         main
     }
@@ -114,7 +117,7 @@ impl App {
         self.recorders.remove(index);
     }
 
-    pub fn main_view(&self) -> Element<MessageApp> {
+    pub fn view_list(&self) -> Element<MessageApp> {
         let mut content = column![].spacing(10).padding(20);
 
         for (index, recorder) in self.recorders.iter().enumerate() {
@@ -139,10 +142,30 @@ impl App {
             content = content.push(recorder_container);
         }
 
-        content =
-            content.push(button("➕ Ajouter un recorder").on_press(MessageApp::WindowAddCounter));
+        content = content.push(
+            button("➕ Ajouter un recorder").on_press(MessageApp::ChangeView(Screen::AddRecorder)),
+        );
 
         content.into()
+    }
+
+    pub fn view_add_recorder(&self) -> Element<MessageApp> {
+        let content = column![
+            text("Ajouter un enregistreur".to_string())
+                .size(30)
+                .width(Length::Fill)
+        ]
+        .spacing(10)
+        .padding(20)
+        .height(Length::Fill)
+        .width(Length::Fill);
+        let input =
+            text_input("title", &self.new_recorder_title).on_input(MessageApp::TitleChanged);
+        let button = row![
+            button("Ajouter").on_press(MessageApp::AddCounter),
+            button("Annuler").on_press(MessageApp::CancelAddCounter)
+        ];
+        content.push(input).push(button).into()
     }
 }
 

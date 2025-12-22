@@ -17,6 +17,7 @@ pub fn container_active(_theme: &Theme) -> container::Style {
 pub fn container_inactive(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(Color::from_rgb(0.85, 0.85, 0.85))),
+        text_color: Some(Color::BLACK),
         border: border::Border {
             radius: 8.0.into(),
             ..Default::default()
