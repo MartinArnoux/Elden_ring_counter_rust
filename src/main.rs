@@ -6,5 +6,5 @@ mod style;
 use crate::structs::app::App;
 
 fn main() -> iced::Result {
-    iced::run(App::update, App::view)
+    iced::application(App::new, App::update, App::view).run()
 }
