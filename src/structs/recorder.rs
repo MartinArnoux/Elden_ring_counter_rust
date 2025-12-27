@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
-
+use uuid::Uuid;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Recorder {
+    uuid: Uuid,
     title: String,
     counter: u128,
     active: bool,
@@ -10,10 +11,15 @@ pub struct Recorder {
 impl Recorder {
     pub fn new(title: String) -> Recorder {
         Recorder {
+            uuid: Uuid::new_v4(),
             title,
             counter: 0,
             active: true,
         }
+    }
+
+    pub fn get_uuid(&self) -> &Uuid {
+        &self.uuid
     }
 
     pub fn increment(&mut self) -> () {

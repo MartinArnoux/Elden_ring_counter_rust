@@ -1,33 +1,37 @@
+use crate::hotkey::{GlobalHotkey, Key, Modifier, WindowsHotkey};
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
-
+use iced::stream;
 use iced::{
-    Alignment, Background, Color, Element, Length, Program, Subscription, Task, Theme, border,
-    task, time,
+    Element, Length, Subscription,
     time::Duration,
-    widget::{Space, button, column, container, row, stack, text, text_input, toggler},
+    widget::{button, column, container, row, text, text_input, toggler},
 };
+use std::thread::spawn;
+use tokio::sync::mpsc::unbounded_channel;
+use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum MessageApp {
     Increment,
     ChangeView(Screen),
     AddCounter,
-    DeleteCounter(usize),
+    DeleteCounter(Uuid),
     ToggleCounter(usize),
     TitleChanged(String),
     CancelAddCounter,
     SaveRecorders,
     AutosaveTick,
 }
-#[derive(Default, Clone)]
+
+#[derive(Default, Clone, Debug)]
 enum Screen {
     #[default]
     List,
     AddRecorder,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct App {
     recorders: Vec<Recorder>,
     screen: Screen,
@@ -38,9 +42,9 @@ pub struct App {
 impl App {
     pub fn new() -> App {
         let recorders = Storage::load_recorders().unwrap_or_default();
-        println!("Load recorders : {:?}", recorders);
+
         App {
-            recorders: recorders,
+            recorders,
             screen: Screen::List,
             new_recorder_title: "".to_string(),
             dirty: false,
@@ -59,7 +63,11 @@ impl App {
 
     pub fn update(&mut self, message: MessageApp) {
         match message {
-            MessageApp::Increment => self.update_all_counter(),
+            MessageApp::Increment => {
+                println!("🔥 Increment reçu !");
+                self.update_all_counter();
+                self.dirty();
+            }
             MessageApp::AddCounter => {
                 self.add_recorder(self.new_recorder_title.clone());
                 self.dirty();
@@ -72,7 +80,6 @@ impl App {
                 self.delete_recorder(x);
                 self.dirty();
             }
-
             MessageApp::ToggleCounter(i) => {
                 if let Some(r) = self.recorders.get_mut(i) {
                     r.activate_deactivate();
@@ -90,6 +97,7 @@ impl App {
             }
             MessageApp::AutosaveTick => {
                 if self.dirty {
+                    println!("💾 Autosave!");
                     let _ = Storage::save_recorders(&self.recorders);
                     self.dirty = false;
                 }
@@ -105,8 +113,18 @@ impl App {
 
         main
     }
+
     pub fn subscription(&self) -> Subscription<MessageApp> {
-        iced::time::every(Duration::from_secs(10)).map(|_| MessageApp::AutosaveTick)
+        let autosave = iced::time::every(Duration::from_secs(10)).map(|_| MessageApp::AutosaveTick);
+
+        let hotkey_sub = Self::hotkey_subscription();
+
+        Subscription::batch(vec![autosave, hotkey_sub])
+    }
+
+    // Worker qui transfère simplement les messages du thread Windows vers Iced
+    fn hotkey_subscription() -> Subscription<MessageApp> {
+        Subscription::run(hotkey_worker)
     }
 
     pub fn reset_new_recorder_title(&mut self) -> () {
@@ -118,7 +136,6 @@ impl App {
     }
 
     fn update_all_counter(&mut self) {
-        // itération mutable sur le Vec
         for recorder in self.recorders.iter_mut() {
             recorder.increment();
         }
@@ -128,11 +145,10 @@ impl App {
         self.recorders.push(Recorder::new(title));
     }
 
-    pub fn delete_recorder(&mut self, index: usize) -> () {
-        if index > self.recorders.len() {
-            return;
+    pub fn delete_recorder(&mut self, uuid: Uuid) -> () {
+        if let Some(pos) = self.recorders.iter().position(|r| *r.get_uuid() == uuid) {
+            self.recorders.remove(pos);
         }
-        self.recorders.remove(index);
     }
 
     pub fn save(&self) -> () {
@@ -186,14 +202,71 @@ impl App {
         .padding(20)
         .height(Length::Fill)
         .width(Length::Fill);
+
         let input =
             text_input("title", &self.new_recorder_title).on_input(MessageApp::TitleChanged);
-        let button = row![
+        let button_row = row![
             button("Ajouter").on_press(MessageApp::AddCounter),
             button("Annuler").on_press(MessageApp::CancelAddCounter)
         ];
-        content.push(input).push(button).into()
+
+        content.push(input).push(button_row).into()
     }
+}
+
+// Worker qui écoute les hotkeys Windows et les transmet à Iced
+//
+// Architecture :
+// 1. Thread Windows (sync) écoute les hotkeys via RegisterHotKey API
+// 2. Envoie via tokio::mpsc (unbounded car le thread est sync, pas de .await)
+// 3. Task async (dans stream::channel) reçoit et transfère à Iced
+// 4. stream::channel crée un Stream compatible Iced avec cycle de vie géré
+//
+// Pourquoi 2 channels ?
+// - tokio::mpsc : Thread sync ne peut pas utiliser stream::channel directement
+// - stream::channel : Protocole Iced, crée un Stream avec lifecycle management
+fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
+    use iced::futures::sink::SinkExt;
+
+    stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
+            println!("🎧 Démarrage du hotkey worker...");
+
+            // Créer le channel tokio pour recevoir les MessageApp du thread Windows
+            let (hotkey_tx, mut hotkey_rx) = unbounded_channel();
+
+            // Spawn le thread Windows qui envoie déjà des MessageApp::Increment
+            spawn(move || {
+                let hotkey_manager = WindowsHotkey::new(hotkey_tx);
+
+                match hotkey_manager.register(&[Modifier::Ctrl], Key::Plus) {
+                    Ok(_) => println!("✅ Hotkey Ctrl+Plus registered"),
+                    Err(e) => eprintln!("❌ Register failed: {:?}", e),
+                }
+
+                println!("🔄 Démarrage de l'event loop Windows...");
+                hotkey_manager.event_loop();
+            });
+
+            // Boucle simple : transférer les MessageApp du thread Windows vers Iced
+            loop {
+                match hotkey_rx.recv().await {
+                    Some(msg) => {
+                        // Le message est déjà un MessageApp::Increment, on le transfère tel quel
+                        println!("📨 Message reçu du thread Windows : {:?}", msg);
+                        let _ = output.send(msg).await;
+                    }
+                    None => {
+                        println!("❌ Channel hotkey fermé");
+                        break;
+                    }
+                }
+            }
+
+            println!("⚠️ Hotkey worker terminé");
+        },
+    )
 }
 
 #[cfg(test)]
@@ -232,8 +305,9 @@ mod tests {
         let mut app = App::new();
         app.add_recorder("A".to_string());
         assert_eq!(app.recorders.len(), 1);
+        let uuid = app.recorders.get(0).unwrap().get_uuid();
 
-        app.update(MessageApp::DeleteCounter(0));
+        app.update(MessageApp::DeleteCounter(*uuid));
 
         assert_eq!(app.recorders.len(), 0);
     }
@@ -245,8 +319,8 @@ mod tests {
         app.add_recorder("B".to_string());
 
         assert_eq!(app.recorders.len(), 2);
-
-        app.update(MessageApp::DeleteCounter(0));
+        let uuid = app.recorders.get(0).unwrap().get_uuid();
+        app.update(MessageApp::DeleteCounter(*uuid));
 
         assert_eq!(app.recorders.len(), 1);
 

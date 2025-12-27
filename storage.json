@@ -1,7 +1,14 @@
 [
   {
-    "title": "Test",
-    "counter": 0,
+    "uuid": "dca262c7-2f0c-4e94-8b2d-40756505d214",
+    "title": "B",
+    "counter": 59,
+    "active": true
+  },
+  {
+    "uuid": "8c9970e0-dfb6-47df-8891-2b013b46de36",
+    "title": "C",
+    "counter": 8,
     "active": true
   }
 ]

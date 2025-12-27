@@ -16,6 +16,7 @@ impl Storage {
 
     pub fn load_recorders() -> Result<Vec<Recorder>, String> {
         if !Path::new(FILE_PATH).exists() {
+            println!("No file ! ");
             return Ok(Vec::new());
         }
 
