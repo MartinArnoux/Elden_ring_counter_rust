@@ -25,6 +25,17 @@ pub fn container_inactive(_theme: &Theme) -> container::Style {
         ..Default::default()
     }
 }
+pub fn container_drag(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color::from_rgb(0.85, 0.92, 1.0))),
+        text_color: Some(Color::BLACK),
+        border: border::Border {
+            radius: 8.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
 
 pub fn cancel_button_style(_theme: &iced::Theme, status: button::Status) -> button::Style {
     match status {

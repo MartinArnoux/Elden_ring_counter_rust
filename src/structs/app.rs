@@ -5,8 +5,9 @@ use iced::stream;
 use iced::{
     Element, Length, Subscription,
     time::Duration,
-    widget::{button, column, container, row, text, text_input, toggler},
+    widget::{button, column, container, row, scrollable, text, text_input, toggler},
 };
+use iced_aw::helpers::card;
 use std::thread::spawn;
 use tokio::sync::mpsc::unbounded_channel;
 use uuid::Uuid;
@@ -17,11 +18,14 @@ pub enum MessageApp {
     ChangeView(Screen),
     AddCounter,
     DeleteCounter(Uuid),
-    ToggleCounter(usize),
+    ToggleCounter(Uuid),
     TitleChanged(String),
     CancelAddCounter,
     SaveRecorders,
     AutosaveTick,
+    StartDrag(usize),
+    Drop(usize),
+    CancelDrag,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -34,6 +38,7 @@ enum Screen {
 #[derive(Clone)]
 pub struct App {
     recorders: Vec<Recorder>,
+    dragging: Option<usize>,
     screen: Screen,
     new_recorder_title: String,
     dirty: bool,
@@ -48,6 +53,7 @@ impl App {
             screen: Screen::List,
             new_recorder_title: "".to_string(),
             dirty: false,
+            dragging: None,
         }
     }
 
@@ -81,10 +87,8 @@ impl App {
                 self.dirty();
             }
             MessageApp::ToggleCounter(i) => {
-                if let Some(r) = self.recorders.get_mut(i) {
-                    r.activate_deactivate();
-                    self.dirty();
-                }
+                self.toggle_recorder(i);
+                self.dirty();
             }
             MessageApp::ChangeView(screen) => self.screen = screen,
             MessageApp::TitleChanged(value) => {
@@ -100,6 +104,24 @@ impl App {
                     println!("💾 Autosave!");
                     let _ = Storage::save_recorders(&self.recorders);
                     self.dirty = false;
+                }
+            }
+            MessageApp::CancelDrag => {
+                self.dragging = None;
+            }
+            MessageApp::StartDrag(index) => self.dragging = Some(index),
+            MessageApp::Drop(target_index) => {
+                if let Some(source_index) = self.dragging {
+                    if source_index != target_index {
+                        let item = self.recorders.remove(source_index);
+                        let insert_at = if source_index < target_index {
+                            target_index - 1
+                        } else {
+                            target_index
+                        };
+                        self.recorders.insert(insert_at, item);
+                    }
+                    self.dragging = None;
                 }
             }
         };
@@ -151,6 +173,12 @@ impl App {
         }
     }
 
+    pub fn toggle_recorder(&mut self, uuid: Uuid) -> () {
+        if let Some(pos) = self.recorders.iter().position(|r| *r.get_uuid() == uuid) {
+            self.recorders.get_mut(pos).unwrap().activate_deactivate();
+        }
+    }
+
     pub fn save(&self) -> () {
         match Storage::save_recorders(&self.recorders) {
             Ok(_) => {}
@@ -161,35 +189,61 @@ impl App {
     }
 
     pub fn view_list(&self) -> Element<MessageApp> {
-        let mut content = column![].spacing(10).padding(20);
+        let mut recorders_list = column![].spacing(10).padding(20);
 
         for (index, recorder) in self.recorders.iter().enumerate() {
-            let is_active = recorder.get_status_recorder();
+            let is_dragging = self.dragging == Some(index);
 
+            let is_active = recorder.get_status_recorder();
+            let uuid = recorder.get_uuid();
             let recorder_row = row![
+                button("☰").on_press(MessageApp::StartDrag(index)),
                 text(recorder.get_title()).size(20).width(Length::Fill),
                 text(recorder.get_counter().to_string()).size(20),
-                toggler(is_active).on_toggle(move |_| MessageApp::ToggleCounter(index))
+                toggler(is_active).on_toggle(move |_| MessageApp::ToggleCounter(*uuid)),
+                button("Supprimer").on_press(MessageApp::DeleteCounter(*uuid))
             ]
             .spacing(20);
 
             let recorder_container = container(recorder_row)
                 .padding(15)
                 .width(Length::Fill)
-                .style(if is_active {
+                .style(if is_dragging {
+                    crate::style::style::container_drag
+                } else if is_active {
                     crate::style::style::container_active
                 } else {
                     crate::style::style::container_inactive
                 });
+            let droppable = button(recorder_container)
+                .on_press(if self.dragging.is_some() {
+                    MessageApp::Drop(index)
+                } else {
+                    MessageApp::CancelDrag
+                })
+                .padding(0)
+                .style(|_theme, _status| button::Style {
+                    background: None,
+                    border: iced::Border::default(),
+                    ..Default::default()
+                });
 
-            content = content.push(recorder_container);
+            recorders_list = recorders_list.push(droppable);
         }
 
-        content = content.push(
-            button("➕ Ajouter un recorder").on_press(MessageApp::ChangeView(Screen::AddRecorder)),
-        );
+        let scrollable_recorders = scrollable(recorders_list).height(Length::Fill);
 
-        content.into()
+        let content = column![
+            scrollable_recorders,
+            button("➕ Ajouter un recorder").on_press(MessageApp::ChangeView(Screen::AddRecorder))
+        ]
+        .spacing(10);
+
+        container(content)
+            .padding(20)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     pub fn view_add_recorder(&self) -> Element<MessageApp> {
