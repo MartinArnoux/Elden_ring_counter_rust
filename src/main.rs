@@ -1,6 +1,7 @@
 use iced;
 
 mod hotkey;
+mod ocr;
 mod structs;
 mod style;
 use crate::structs::app::App;

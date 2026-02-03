@@ -1,11 +1,22 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RecorderType {
+    Classic,      // Compteur normal (boss spécifique)
+    GlobalDeaths, // Compteur global de toutes les morts
+    GlobalBosses, // Compteur global de morts contre des boss uniquement
+}
+fn default_recorder_type() -> RecorderType {
+    RecorderType::Classic
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Recorder {
     uuid: Uuid,
     title: String,
     counter: u128,
     active: bool,
+    recorder_type: RecorderType,
 }
 
 impl Recorder {
@@ -15,6 +26,28 @@ impl Recorder {
             title,
             counter: 0,
             active: true,
+            recorder_type: RecorderType::Classic,
+        }
+    }
+    // Créer le compteur global des morts
+    pub fn new_global_deaths() -> Self {
+        Recorder {
+            title: "💀 MORTS TOTALES".to_string(),
+            counter: 0,
+            uuid: Uuid::from_u128(1), // UUID spécial
+            active: true,
+            recorder_type: RecorderType::GlobalDeaths,
+        }
+    }
+
+    // Créer le compteur global des morts contre boss
+    pub fn new_global_bosses() -> Self {
+        Recorder {
+            title: "⚔️ MORTS CONTRE BOSS".to_string(),
+            counter: 0,
+            uuid: Uuid::from_u128(2), // UUID spécial
+            active: true,
+            recorder_type: RecorderType::GlobalBosses,
         }
     }
 
@@ -27,8 +60,17 @@ impl Recorder {
             self.counter += 1;
         }
     }
+    pub fn force_increment(&mut self) -> () {
+        self.counter += 1;
+    }
+    pub fn force_decrement(&mut self) -> () {
+        self.counter -= 1;
+    }
     pub fn get_counter(&self) -> u128 {
         self.counter
+    }
+    pub fn reset(&mut self) {
+        self.counter = 0;
     }
 
     pub fn set_title(&mut self, title: String) {
@@ -50,6 +92,29 @@ impl Recorder {
     }
     pub fn get_status_recorder(&self) -> bool {
         self.active
+    }
+
+    pub fn get_type(&self) -> &RecorderType {
+        &self.recorder_type
+    }
+
+    pub fn is_global(&self) -> bool {
+        matches!(
+            self.recorder_type,
+            RecorderType::GlobalDeaths | RecorderType::GlobalBosses
+        )
+    }
+
+    pub fn is_global_deaths(&self) -> bool {
+        self.recorder_type == RecorderType::GlobalDeaths
+    }
+
+    pub fn is_global_bosses(&self) -> bool {
+        self.recorder_type == RecorderType::GlobalBosses
+    }
+
+    pub fn is_classic(&self) -> bool {
+        self.recorder_type == RecorderType::Classic
     }
 }
 

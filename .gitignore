@@ -1,2 +1,4 @@
 /target
-storage.json
+*.json
+*.png
+*.jpg
