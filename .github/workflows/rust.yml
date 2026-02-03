@@ -1,22 +1,45 @@
-name: Rust
+name: Windows Build and Release
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ main ]
+    tags:
+      - 'v*'
   pull_request:
-    branches: [ "master" ]
-
-env:
-  CARGO_TERM_COLOR: always
+    branches: [ main ]
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
-
+  test-windows:
+    if: startsWith(github.ref, 'refs/heads/') || github.event_name == 'pull_request'
+    runs-on: windows-latest
+    
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
+    - name: Install Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  release-windows:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+    
+    - name: Build Release
+      run: cargo build --release
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: target/release/elden-ring-counter.exe
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
