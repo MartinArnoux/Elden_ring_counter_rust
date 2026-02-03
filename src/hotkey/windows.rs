@@ -25,23 +25,16 @@ impl Default for WindowsHotkey {
 impl GlobalHotkey for WindowsHotkey {
     type Messages = UnboundedSender<MessageApp>;
 
-    fn get_mut_messages(&mut self) -> &mut Self::Messages {
-        &mut self.sender
-    }
-
     fn register(&self, mods: &[Modifier], key: Key) -> Result<(), HotkeyError> {
         let mut win_mods = HOT_KEY_MODIFIERS(0);
         for m in mods {
             match m {
-                Modifier::Ctrl => win_mods |= MOD_CONTROL,
-                Modifier::Alt => win_mods |= MOD_ALT,
-                Modifier::Shift => win_mods |= MOD_SHIFT,
+                Modifier::SHIFT => win_mods |= MOD_SHIFT,
             }
         }
 
         let vk = match key {
             Key::Plus => VK_ADD.0 as u32,
-            Key::Char(c) => c as u32,
         };
 
         unsafe {

@@ -6,9 +6,6 @@ pub enum RecorderType {
     GlobalDeaths, // Compteur global de toutes les morts
     GlobalBosses, // Compteur global de morts contre des boss uniquement
 }
-fn default_recorder_type() -> RecorderType {
-    RecorderType::Classic
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Recorder {
@@ -73,9 +70,9 @@ impl Recorder {
         self.counter = 0;
     }
 
-    pub fn set_title(&mut self, title: String) {
-        self.title = title;
-    }
+    // pub fn set_title(&mut self, title: String) {
+    //     self.title = title;
+    // }
     pub fn get_title(&self) -> String {
         self.title.clone()
     }
@@ -83,20 +80,14 @@ impl Recorder {
     pub fn activate_deactivate(&mut self) {
         self.active = !self.active
     }
-    pub fn activate(&mut self) {
-        self.active = true
-    }
 
-    pub fn deactivate(&mut self) {
-        self.active = false
-    }
     pub fn get_status_recorder(&self) -> bool {
         self.active
     }
 
-    pub fn get_type(&self) -> &RecorderType {
-        &self.recorder_type
-    }
+    // pub fn get_type(&self) -> &RecorderType {
+    //     &self.recorder_type
+    // }
 
     pub fn is_global(&self) -> bool {
         matches!(
@@ -134,7 +125,7 @@ mod tests {
         let mut r = Recorder::new("Test".to_string());
 
         r.increment();
-        r.deactivate();
+        r.activate_deactivate();
         r.increment();
 
         assert_eq!(r.get_counter(), 1);
@@ -144,10 +135,10 @@ mod tests {
     fn activate_deactivate_works() {
         let mut r = Recorder::new("Test".to_string());
 
-        r.deactivate();
+        r.activate_deactivate();
         assert!(!r.get_status_recorder());
 
-        r.activate();
+        r.activate_deactivate();
         assert!(r.get_status_recorder());
     }
 }

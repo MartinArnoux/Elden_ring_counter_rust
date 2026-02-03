@@ -9,7 +9,6 @@ use iced::{
     time::Duration,
     widget::{button, column, container, row, scrollable, text, text_input, toggler},
 };
-use iced_core::Widget;
 use std::thread::spawn;
 use strsim::normalized_levenshtein;
 use tokio::sync::mpsc::unbounded_channel;
@@ -19,7 +18,6 @@ use uuid::Uuid;
 pub enum StatusOCR {
     Starting,
     Started,
-    Error(String),
     Stopped,
 }
 
@@ -32,7 +30,6 @@ pub enum MessageApp {
     ToggleCounter(Uuid),
     TitleChanged(String),
     CancelAddCounter,
-    SaveRecorders,
     AutosaveTick,
     StartDrag(usize),
     Drop(usize),
@@ -42,7 +39,6 @@ pub enum MessageApp {
     DeathDetected,
     StartingOCR,
     OCROK,
-    OCRStopped,
     IncrementCounter(Uuid),
     DecrementCounter(Uuid),
     ResetCounter(Uuid),
@@ -64,17 +60,6 @@ pub struct App {
     dirty: bool,
     ocr_activate: bool,
     ocr_status: StatusOCR,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct OcrSubscriptionId {
-    active: bool,
-}
-
-impl OcrSubscriptionId {
-    fn new(active: bool) -> Self {
-        Self { active }
-    }
 }
 
 impl App {
@@ -161,11 +146,7 @@ impl App {
             MessageApp::TitleChanged(value) => {
                 self.new_recorder_title = value;
             }
-            MessageApp::SaveRecorders => {
-                if let Err(e) = Storage::save_recorders(&self.recorders) {
-                    eprintln!("Erreur de sauvegarde : {e}");
-                }
-            }
+
             MessageApp::AutosaveTick => {
                 if self.dirty {
                     #[cfg(feature = "debug")]
@@ -232,10 +213,6 @@ impl App {
             MessageApp::OCROK => {
                 self.ocr_status = StatusOCR::Started;
                 println!("🤖 OCR started !");
-            }
-            MessageApp::OCRStopped => {
-                self.ocr_status = StatusOCR::Stopped;
-                println!("🤖 OCR stopped !");
             }
             MessageApp::IncrementCounter(uuid) => {
                 self.increment_counter(uuid);
@@ -425,16 +402,7 @@ impl App {
         }
     }
 
-    pub fn save(&self) -> () {
-        match Storage::save_recorders(&self.recorders) {
-            Ok(_) => {}
-            Err(e) => {
-                println!("Error save : {}", e)
-            }
-        }
-    }
-
-    pub fn view_list(&self) -> Element<MessageApp> {
+    pub fn view_list(&self) -> Element<'_, MessageApp> {
         let mut recorders_list = column![].spacing(10).padding(20);
 
         for (index, recorder) in self.recorders.iter().enumerate() {
@@ -563,7 +531,6 @@ impl App {
         let (ocr_status_text, ocr_status_color) = match &self.ocr_status {
             StatusOCR::Starting => ("Démarrage...".to_string(), Color::from_rgb(1.0, 0.65, 0.0)), // orange
             StatusOCR::Started => ("OCR démarré".to_string(), Color::from_rgb(0.0, 0.8, 0.0)), // vert
-            StatusOCR::Error(err) => (format!("Erreur : {}", err), Color::from_rgb(0.8, 0.0, 0.0)), // rouge
             StatusOCR::Stopped => ("OCR arrêté".to_string(), Color::from_rgb(0.6, 0.6, 0.6)), // gris
         };
 
@@ -587,7 +554,7 @@ impl App {
             .into()
     }
 
-    pub fn view_add_recorder(&self) -> Element<MessageApp> {
+    pub fn view_add_recorder(&self) -> Element<'_, MessageApp> {
         let content = column![
             text("Ajouter un enregistreur".to_string())
                 .size(30)
@@ -647,7 +614,7 @@ fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
             spawn(move || {
                 let hotkey_manager = WindowsHotkey::new(hotkey_tx);
 
-                match hotkey_manager.register(&[Modifier::Ctrl], Key::Plus) {
+                match hotkey_manager.register(&[Modifier::SHIFT], Key::Plus) {
                     Ok(_) => println!("✅ Hotkey Ctrl+Plus registered"),
                     Err(e) => eprintln!("❌ Register failed: {:?}", e),
                 }

@@ -57,28 +57,6 @@ pub fn container_drag(_theme: &Theme) -> container::Style {
     }
 }
 
-pub fn cancel_button_style(_theme: &iced::Theme, status: button::Status) -> button::Style {
-    match status {
-        button::Status::Hovered => button::Style {
-            background: Some(Background::Color(Color::from_rgb(0.8, 0.2, 0.2))),
-            text_color: Color::WHITE,
-            ..Default::default()
-        },
-        _ => button::Style::default(),
-    }
-}
-
-pub fn validate_button_style(_theme: &iced::Theme, status: button::Status) -> button::Style {
-    match status {
-        button::Status::Hovered => button::Style {
-            background: Some(Background::Color(Color::from_rgb(0.2, 0.7, 0.3))),
-            text_color: Color::WHITE,
-            ..Default::default()
-        },
-        _ => button::Style::default(),
-    }
-}
-
 pub fn container_global_deaths(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(Color::from_rgb(0.15, 0.05, 0.05))),

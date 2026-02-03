@@ -9,10 +9,6 @@ macro_rules! lap {
     }};
 }
 use image::{DynamicImage, GrayImage, ImageBuffer, Luma, RgbaImage};
-use imageproc::contrast::otsu_level;
-use scrap::{Capturer, Display};
-use std::collections::VecDeque;
-use std::{process, thread, time::Duration};
 use uni_ocr::{OcrEngine, OcrProvider};
 use xcap::Monitor;
 // ============================================================================
@@ -83,7 +79,6 @@ fn capture_screen() -> Result<(DynamicImage, u32, u32), String> {
 // ============================================================================
 
 fn has_red_text_present(image: &DynamicImage) -> bool {
-    let start_red = std::time::Instant::now();
     let rgba = image.to_rgba8();
     let mut red_pixel_count = 0;
     let total_pixels = (image.width() * image.height()) as usize;
@@ -100,7 +95,6 @@ fn has_red_text_present(image: &DynamicImage) -> bool {
 
     let pct = red_pixel_count as f32 / total_pixels as f32;
 
-    let elapsed = start_red.elapsed().as_millis();
     pct > 0.01 // 1% suffit largement
 }
 
@@ -119,21 +113,21 @@ fn extract_red_channel(image: &DynamicImage) -> ImageBuffer<Luma<u8>, Vec<u8>> {
 fn preprocess_v1_fast(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage {
     use std::time::Instant;
 
-    let t = Instant::now();
+    let _t = Instant::now();
     let brightened = adjust_gamma(red, 0.4);
-    lap!(t, "PREPROCESS |   gamma 0.4          {:>6} ms");
+    lap!(_t, "PREPROCESS |   gamma 0.4          {:>6} ms");
     let (w, h) = brightened.dimensions();
 
     const TARGET_HEIGHT: u32 = 120;
     let scale = TARGET_HEIGHT as f32 / h as f32;
 
-    let t = Instant::now();
+    let _t = Instant::now();
     let scaled = DynamicImage::ImageLuma8(brightened).resize(
         (w as f32 * scale) as u32,
         TARGET_HEIGHT,
         image::imageops::FilterType::CatmullRom,
     );
-    lap!(t, "PREPROCESS |   total time         {:>6} ms");
+    lap!(_t, "PREPROCESS |   total time         {:>6} ms");
     scaled
 }
 
@@ -142,69 +136,68 @@ fn preprocess_v2_fallback(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage 
 
     lap!(t, "PREPROCESS | ── Version 2 (FALLBACK)");
 
-    let t = Instant::now();
+    let _t = Instant::now();
     let gamma = adjust_gamma(red, 0.3);
-    lap!(t, "PREPROCESS |   gamma 0.3          {:>6} ms");
+    lap!(_t, "PREPROCESS |   gamma 0.3          {:>6} ms");
 
-    let t = Instant::now();
+    let _t = Instant::now();
     let contrast = increase_contrast(&gamma, 2.0);
-    lap!(t, "PREPROCESS |   contrast x2.0     {:>6} ms");
+    lap!(_t, "PREPROCESS |   contrast x2.0     {:>6} ms");
     let (w, h) = contrast.dimensions();
 
     const TARGET_HEIGHT: u32 = 120;
     let scale = TARGET_HEIGHT as f32 / h as f32;
 
-    let t = Instant::now();
+    let _t = Instant::now();
     let scaled = DynamicImage::ImageLuma8(contrast).resize(
         (w as f32 * scale) as u32,
         TARGET_HEIGHT,
         image::imageops::FilterType::CatmullRom,
     );
 
-    lap!(t, "PREPROCESS |   resize → 120px     {:>6} ms");
+    lap!(_t, "PREPROCESS |   resize → 120px     {:>6} ms");
 
     scaled
 }
-fn preprocess_death_text_optimized(image: &DynamicImage) -> (DynamicImage, DynamicImage) {
+/* fn preprocess_death_text_optimized(image: &DynamicImage) -> (DynamicImage, DynamicImage) {
     use std::time::Instant;
 
-    let t0 = Instant::now();
+    let _t0 = Instant::now();
 
-    let t = Instant::now();
     let red = extract_red_channel(image);
 
     lap!(t, "PREPROCESS |   extract red channel {:>6} ms");
     let v1 = preprocess_v1_fast(&red);
     let v2 = preprocess_v2_fallback(&red);
 
-    lap!(t0, "════════ PREPROCESS TOTAL        {:>6} ms ════════");
+    lap!(_t0, "════════ PREPROCESS TOTAL        {:>6} ms ════════");
 
     (v1, v2)
-}
+}*/
 
 // ============================================================================
 // DÉTECTION DE MORT (avec pré-filtre)
 // ============================================================================
 
 pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
-    let t0 = std::time::Instant::now();
+    let _t0 = std::time::Instant::now();
 
     // ───────────────── Capture écran
-    let t = std::time::Instant::now();
+    let _t = std::time::Instant::now();
     let (dyn_image, w, h) = tokio::task::spawn_blocking(|| capture_screen())
         .await
         .map_err(|e| format!("Erreur join: {}", e))?
         .map_err(|e| format!("Erreur capture: {}", e))?;
-    lap!(t, "Capture écran");
+    lap!(_t, "Capture écran");
 
     // ───────────────── Crop
-    let t = std::time::Instant::now();
+    let _t = std::time::Instant::now();
     let crop_x = (w * 33) / 100;
     let crop_y = (h * 46) / 100;
     let crop_width = (w * 35) / 100;
     let crop_height = (h * 10) / 100;
     let dead_zone = dyn_image.crop_imm(crop_x, crop_y, crop_width, crop_height);
-    lap!(t, "Crop zone");
+    lap!(_t, "Crop zone");
 
     // // ───────────────── Save debug crop
     // let t = std::time::Instant::now();
@@ -212,13 +205,13 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
     // lap!(t, "Save crop (disk)");
 
     // ───────────────── Pré-filtre rouge
-    let t = std::time::Instant::now();
+    let _t = std::time::Instant::now();
     if !has_red_text_present(&dead_zone) {
         lap!(t, "Pré-filtre rouge (FAIL)");
         lap!(t0, "TOTAL detect_death");
         return Ok(None);
     }
-    lap!(t, "Pré-filtre rouge (OK)");
+    lap!(_t, "Pré-filtre rouge (OK)");
 
     // ───────────────── Save écran complet
     // let t = std::time::Instant::now();
@@ -226,42 +219,42 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
     // lap!(t, "Save screen (disk)");
 
     // ───────────────── Préprocess OCR
-    let t = std::time::Instant::now();
-    let versions = preprocess_death_text_optimized(&dead_zone);
-    lap!(t, "Preprocess OCR");
+    let _t = std::time::Instant::now();
+    //let versions = preprocess_death_text_optimized(&dead_zone);
+    lap!(_t, "Preprocess OCR");
 
     // ───────────────── Engine OCR
-    let t = std::time::Instant::now();
+    let _t = std::time::Instant::now();
     let engine = OcrEngine::new(OcrProvider::Auto).map_err(|e| format!("OCR Engine: {}", e))?;
-    lap!(t, "Init OCR engine");
+    lap!(_t, "Init OCR engine");
 
     // ───────────────── Preprocess + OCR V1
     let red = extract_red_channel(&dead_zone);
 
     let v1 = preprocess_v1_fast(&red);
     if ocr_check(&engine, &v1, "OCR version 1").await {
-        lap!(t0, "TOTAL detect_death");
+        lap!(_t0, "TOTAL detect_death");
         return Ok(Some(dyn_image));
     }
 
     let v2 = preprocess_v2_fallback(&red);
     if ocr_check(&engine, &v2, "OCR version 2").await {
-        lap!(t0, "TOTAL detect_death");
+        lap!(_t0, "TOTAL detect_death");
         return Ok(Some(dyn_image));
     }
 
     return Ok(None);
 }
 
-async fn ocr_check(engine: &OcrEngine, image: &DynamicImage, label: &str) -> bool {
-    let t = std::time::Instant::now();
+async fn ocr_check(engine: &OcrEngine, image: &DynamicImage, _label: &str) -> bool {
+    let _t = std::time::Instant::now();
 
     let detected = match engine.recognize_image(image).await {
         Ok((text, _, _)) => is_death_text(&text),
         Err(_) => false,
     };
 
-    lap!(t, label);
+    lap!(_t, _label);
     detected
 }
 fn is_death_text(text: &str) -> bool {
