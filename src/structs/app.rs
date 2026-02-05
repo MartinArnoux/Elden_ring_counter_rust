@@ -1,8 +1,13 @@
-use crate::structs::recorder::Recorder;
-use crate::structs::storage::Storage;
-use crate::utils::app_worker::{hotkey_worker, ocr_worker};
+use super::recorder::Recorder;
+use super::settings::game::{ALL_GAMES, Game};
+use super::settings::language::{ALL_LANGUAGES, Language};
+use super::settings::screen::{ScreenInfo, get_screens_vec};
+use super::settings::settings::Settings;
+use super::storage::Storage;
+use crate::utils::app_worker::{hotkey_subscription, ocr_subscription};
 use iced::Color;
-use iced::widget::{Container, Row};
+use iced::widget::{Column, PickList};
+use iced::widget::{Container, Row, pick_list};
 use iced::{
     Element, Length, Subscription,
     time::Duration,
@@ -51,6 +56,10 @@ pub enum MessageApp {
     StartEditingRecorderTitle(Uuid),
     UpdateRecorderTitle(String),
     EndEditingRecorderTitle(Uuid),
+    SaveSettings,
+    GameSelected(Game),
+    LanguageSelected(Language),
+    ScreenSelected(ScreenInfo),
 }
 
 #[derive(Default, Clone, Debug)]
@@ -58,10 +67,12 @@ pub enum Screen {
     #[default]
     List,
     AddRecorder,
+    Settings,
 }
 
 #[derive(Clone)]
 pub struct App {
+    settings: Settings,
     recorders: Vec<Recorder>,
     dragging: Option<usize>,
     screen: Screen,
@@ -71,6 +82,7 @@ pub struct App {
     ocr_status: StatusOCR,
     edit_input_recorder_uuid: Option<Uuid>,
     edit_input_recorder_title: String,
+    screens: Vec<ScreenInfo>,
 }
 
 impl App {
@@ -88,7 +100,8 @@ impl App {
             }
         };
         Self::ensure_global_counters(&mut recorders);
-
+        let settings = Storage::load_settings().unwrap_or_default();
+        let screens = get_screens_vec().unwrap_or_default();
         App {
             recorders,
             screen: Screen::List,
@@ -99,16 +112,18 @@ impl App {
             ocr_status: StatusOCR::Stopped,
             edit_input_recorder_uuid: None,
             edit_input_recorder_title: String::new(),
+            settings,
+            screens,
         }
     }
 
     fn go_to(&mut self, screen: Screen) -> () {
         match screen {
-            Screen::AddRecorder => self.screen = screen,
             Screen::List => {
                 self.reset_new_recorder_title();
                 self.screen = screen
             }
+            _ => self.screen = screen,
         }
     }
     fn ensure_global_counters(recorders: &mut Vec<Recorder>) {
@@ -260,6 +275,19 @@ impl App {
                     self.edit_input_recorder_title = recorder.get_title().to_string();
                 }
             }
+            MessageApp::SaveSettings => {
+                Storage::save_settings(&self.settings).unwrap();
+                self.screen = Screen::List;
+            }
+            MessageApp::GameSelected(game) => {
+                self.settings.set_game(game);
+            }
+            MessageApp::LanguageSelected(language) => {
+                self.settings.set_language(language);
+            }
+            MessageApp::ScreenSelected(screen) => {
+                self.settings.set_screen(screen.index);
+            }
         };
     }
 
@@ -267,6 +295,7 @@ impl App {
         let main = match self.screen {
             Screen::List => self.view_list(),
             Screen::AddRecorder => self.view_add_recorder(),
+            Screen::Settings => self.view_settings(),
         };
         main
     }
@@ -274,25 +303,16 @@ impl App {
     pub fn subscription(&self) -> Subscription<MessageApp> {
         let autosave = iced::time::every(Duration::from_secs(10)).map(|_| MessageApp::AutosaveTick);
 
-        let hotkey_sub = Self::hotkey_subscription();
+        let hotkey_sub = hotkey_subscription();
 
         // ✅ Conditionnellement créer la subscription OCR
         let ocr_sub = if self.ocr_activate {
-            Self::ocr_subscription()
+            ocr_subscription(self.settings.get_screen(), self.settings.get_game_config())
         } else {
             Subscription::none()
         };
 
         Subscription::batch(vec![autosave, hotkey_sub, ocr_sub])
-    }
-
-    // Worker qui transfère simplement les messages du thread Windows vers Iced
-    fn hotkey_subscription() -> Subscription<MessageApp> {
-        Subscription::run(hotkey_worker)
-    }
-
-    fn ocr_subscription() -> Subscription<MessageApp> {
-        Subscription::run(ocr_worker)
     }
 
     fn increment_global_deaths(&mut self) {
@@ -631,7 +651,12 @@ impl App {
             // Texte du statut OCR avec couleur
             ocr_status,
             scrollable_recorders,
-            button("➕ Ajouter un recorder").on_press(MessageApp::ChangeView(Screen::AddRecorder))
+            row![
+                button("➕ Ajouter un recorder")
+                    .on_press(MessageApp::ChangeView(Screen::AddRecorder)),
+                button("Configurer").on_press(MessageApp::ChangeView(Screen::Settings))
+            ]
+            .spacing(10),
         ]
         .spacing(10);
 
@@ -663,6 +688,65 @@ impl App {
 
         content.push(input).push(button_row).into()
     }
+
+    pub fn view_settings(&self) -> Element<'_, MessageApp> {
+        let mut content = Column::new()
+            .spacing(10)
+            .padding(20)
+            .width(Length::Fill)
+            .push(Text::new("Paramètres").size(30));
+
+        // Valeur sélectionnée (Option<Game>)
+        let selected_game = Some(self.settings.get_game());
+
+        let game_pick_list = pick_list(ALL_GAMES, selected_game, MessageApp::GameSelected);
+
+        let game_row = Row::new()
+            .spacing(10)
+            .push(Text::new("Game:"))
+            .push(game_pick_list);
+
+        // On garde tes autres éléments
+
+        let select_language = pick_list(
+            ALL_LANGUAGES,                      // &[Language]
+            Some(self.settings.get_language()), // Option<Language>
+            MessageApp::LanguageSelected,       // fn(Language) -> Message
+        );
+
+        let language_row = Row::new()
+            .spacing(10)
+            .push(Text::new("Langue:"))
+            .push(select_language);
+
+        let selected_screen = self
+            .screens
+            .iter()
+            .find(|s| s.index == self.settings.get_screen())
+            .cloned();
+
+        let screen_pick_list = PickList::new(
+            self.screens.as_slice(), // ✅ IMPORTANT
+            selected_screen,
+            MessageApp::ScreenSelected,
+        );
+
+        let screen_row = Row::new()
+            .spacing(10)
+            .push(Text::new("Écran:"))
+            .push(screen_pick_list);
+
+        let button_save = button("Enregistrer").on_press(MessageApp::SaveSettings);
+
+        content = content
+            .push(game_row)
+            .push(language_row)
+            .push(screen_row)
+            .push(button_save);
+
+        content.into()
+    }
+
     fn recorders_exist(&self, title: String) -> bool {
         if title.is_empty() {
             return false;

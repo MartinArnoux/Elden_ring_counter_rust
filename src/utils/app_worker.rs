@@ -1,13 +1,30 @@
 use crate::hotkey::{GlobalHotkey, Key, Modifier, WindowsHotkey};
-use crate::ocr::ocr::detect_death;
-use crate::ocr::ocr::get_boss_names;
+use crate::ocr::ocr::{detect_death, get_boss_names};
 use crate::structs::app::{ActionOCR, MessageApp};
+use crate::structs::settings::game::GameConfig;
+use crate::utils::screen_capture::capture_full_screen;
+use iced::Subscription;
 use iced::{stream, time::Duration};
 use std::thread::spawn;
 use std::time::Instant;
 use tokio::task::yield_now;
 
 use tokio::sync::mpsc::unbounded_channel;
+
+//SUBSCRIPTIONS
+pub fn hotkey_subscription() -> Subscription<MessageApp> {
+    Subscription::run(hotkey_worker)
+}
+
+pub fn ocr_subscription(screen: i8, game_config: GameConfig) -> Subscription<MessageApp> {
+    Subscription::run_with(
+        (screen, game_config.clone()),
+        move |(screen, game_config)| ocr_worker(*screen, game_config.clone()),
+    )
+}
+
+//WORKER
+
 // Worker qui écoute les hotkeys Windows et les transmet à Iced
 //
 // Architecture :
@@ -63,24 +80,19 @@ pub fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
     )
 }
 
-pub fn ocr_worker() -> impl iced::futures::Stream<Item = MessageApp> {
+pub fn ocr_worker(
+    screen: i8,
+    game_config: GameConfig,
+) -> impl iced::futures::Stream<Item = MessageApp> {
     use iced::futures::sink::SinkExt;
 
     stream::channel(
         100,
-        |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
+        move |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
             println!("🎧 Démarrage du OCR worker (détection mort)...");
 
-            /*#[cfg(target_os = "windows")]
-            {
-                use windows::Win32::System::Threading::*;
-                unsafe {
-                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-                }
-            }*/
-
-            //tokio::time::sleep(Duration::from_secs(3)).await;
             let _ = output.send(MessageApp::StartingOCR).await;
+            //tokio::time::sleep(Duration::from_secs(3)).await;
 
             let mut last_death_time = Instant::now();
 
@@ -98,9 +110,16 @@ pub fn ocr_worker() -> impl iced::futures::Stream<Item = MessageApp> {
                 }
 
                 let loop_start = Instant::now();
+                let full_screen = match capture_full_screen(screen.clone()).await {
+                    Ok(img) => img,
+                    Err(e) => {
+                        eprintln!("❌ Erreur capture: {}", e);
+                        continue;
+                    }
+                };
 
-                match detect_death().await {
-                    Ok(Some(dyn_image)) => {
+                match detect_death(&full_screen, &game_config.get_death_zone()).await {
+                    Ok(true) => {
                         println!("DetectDeath! after {:?}", loop_start.elapsed());
                         println!(
                             "Last death time : {:?}",
@@ -124,7 +143,7 @@ pub fn ocr_worker() -> impl iced::futures::Stream<Item = MessageApp> {
 
                             // 🔥 RUN BOSS OCR IN PARALLEL (no UI blocking)
                             let mut output_clone = output.clone();
-                            let dyn_image_clone = dyn_image.clone();
+                            let dyn_image_clone = full_screen.clone();
 
                             let handler = tokio::spawn(async move {
                                 println!(
@@ -166,7 +185,7 @@ pub fn ocr_worker() -> impl iced::futures::Stream<Item = MessageApp> {
                         println!("end death detection {:?}", loop_start.elapsed());
                     }
 
-                    Ok(None) => {}
+                    Ok(false) => {}
 
                     Err(e) => {
                         eprintln!("❌ Erreur OCR : {}", e);
