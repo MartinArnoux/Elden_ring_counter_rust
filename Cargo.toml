@@ -29,3 +29,4 @@ windows-core = "0.62.2"
 wayland=[]
 timing=[]
 debug=[]
+no_save=[]

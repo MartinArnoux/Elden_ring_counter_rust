@@ -8,6 +8,8 @@ macro_rules! lap {
         }
     }};
 }
+use std::collections::HashMap;
+
 use image::{DynamicImage, GrayImage, ImageBuffer, Luma, RgbaImage};
 use uni_ocr::{OcrEngine, OcrProvider};
 use xcap::Monitor;
@@ -290,61 +292,113 @@ pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, Stri
     // Boss principal
     let boss_zone_1 = dyn_image.crop_imm(crop_x, crop_y, crop_width, crop_height);
 
-    // Essayer plusieurs prétraitements
+    // Tester plusieurs prétraitements
     let versions = vec![
-        ("adaptive", process_boss_adaptive(&boss_zone_1)),
-        ("contrast_1.5", process_boss_contrast(&boss_zone_1, 1.5)),
-        ("contrast_2.0", process_boss_contrast(&boss_zone_1, 2.0)),
+        process_boss_gamma(&boss_zone_1, 0.20),
+        process_boss_gamma(&boss_zone_1, 0.25),
+        process_boss_gamma(&boss_zone_1, 0.30),
+        process_boss_gamma(&boss_zone_1, 0.35),
+        process_boss_gamma(&boss_zone_1, 0.40),
+        process_boss_gamma_contrast(&boss_zone_1, 0.30, 1.3),
+        process_boss_gamma_contrast(&boss_zone_1, 0.30, 1.5),
     ];
 
-    let mut best_text = String::new();
-    let mut best_length = 0; // On utilise la longueur comme heuristique
+    let mut candidates: Vec<(String, f64)> = Vec::new();
 
-    for (name, version) in versions {
+    for (idx, version) in versions.iter().enumerate() {
         if let Ok((text, _, _)) = engine.recognize_image(&version).await {
-            let cleaned = text.trim().to_string();
-            // On garde le texte le plus long et qui semble valide
-            if !cleaned.is_empty() && cleaned.len() > best_length && cleaned.len() > 5 {
-                best_text = cleaned;
-                best_length = best_text.len();
-                println!("Meilleur résultat avec {}: {}", name, best_text);
+            let cleaned = clean_ocr_text_universal(&text);
+            if !cleaned.is_empty() {
+                let score = calculate_universal_text_quality(&cleaned, &text);
+                candidates.push((cleaned.clone(), score));
+                println!("Version {}: '{}' (score: {:.2})", idx, cleaned, score);
             }
         }
     }
 
-    if !best_text.is_empty() {
-        bosses.push(best_text);
+    let mut freq = HashMap::new();
+    for (text, _) in &candidates {
+        *freq.entry(text.clone()).or_insert(0usize) += 1;
+    }
 
-        // Boss secondaire
-        let crop_y_2 = crop_y.saturating_sub((h * 5) / 100);
-        let boss_zone_2 = dyn_image.crop_imm(crop_x, crop_y_2, crop_width, crop_height);
+    for (text, score) in candidates.iter_mut() {
+        if let Some(count) = freq.get(text) {
+            *score += (*count as f64) * 2.5;
+        }
+    }
+    // Trier par score décroissant
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        // Essayer les mêmes prétraitements pour le boss secondaire
-        let versions2 = vec![
-            process_boss_adaptive(&boss_zone_2),
-            process_boss_contrast(&boss_zone_2, 1.5),
-            process_boss_contrast(&boss_zone_2, 2.0),
-        ];
+    if let Some((best_text, best_score)) = candidates.first() {
+        println!(
+            "✅ Meilleur résultat (score {:.2}): {}",
+            best_score, best_text
+        );
 
-        let mut best_text2 = String::new();
-        let mut best_length2 = 0;
+        if *best_score > 5.0 {
+            bosses.push(best_text.clone());
 
-        for version in versions2 {
-            if let Ok((text2, _, _)) = engine.recognize_image(&version).await {
-                let cleaned = text2.trim().to_string();
-                if !cleaned.is_empty() && cleaned.len() > best_length2 && cleaned.len() > 5 {
-                    best_text2 = cleaned;
-                    best_length2 = best_text2.len();
+            // Boss secondaire
+            let crop_y_2 = crop_y.saturating_sub((h * 5) / 100);
+            let boss_zone_2 = dyn_image.crop_imm(crop_x, crop_y_2, crop_width, crop_height);
+
+            let versions2 = vec![
+                process_boss_gamma(&boss_zone_2, 0.20),
+                process_boss_gamma(&boss_zone_2, 0.25),
+                process_boss_gamma(&boss_zone_2, 0.30),
+                process_boss_gamma(&boss_zone_2, 0.35),
+            ];
+
+            let mut best_text2 = String::new();
+            let mut best_score2 = 0.0;
+
+            for version in versions2.clone() {
+                if let Ok((text2, _, _)) = engine.recognize_image(&version).await {
+                    let cleaned2 = clean_ocr_text_universal(&text2);
+                    let score2 = calculate_universal_text_quality(&cleaned2, &text2);
+                    if score2 > best_score2 {
+                        best_score2 = score2;
+                        best_text2 = cleaned2;
+                    }
                 }
             }
-        }
 
-        if !best_text2.is_empty() {
-            bosses.push(best_text2);
+            if !best_text2.is_empty() && best_score2 > 5.0 {
+                bosses.push(best_text2);
+            }
+            #[cfg(feature = "debug")]
+            {
+                dyn_image.save("all_image.png").unwrap();
+                boss_zone_1.save("boss_zone_1.png").unwrap();
+                boss_zone_2.save("boss_zone_2.png").unwrap();
+                let mut i = 0;
+                for version in versions {
+                    version.save(format!("version_{}.png", i)).unwrap();
+                    i += 1;
+                }
+                let mut i = 0;
+                for version in versions2 {
+                    version.save(format!("version_2_{}.png", i)).unwrap();
+                    i += 1;
+                }
+            }
         }
     }
 
     Ok(bosses)
+}
+fn process_boss_simple(dyn_image: &DynamicImage, gamma: f32) -> DynamicImage {
+    let gray = dyn_image.to_luma8();
+    let mut enhanced = gray.clone();
+
+    for pixel in enhanced.pixels_mut() {
+        let val = pixel[0] as f32 / 255.0;
+        let corrected = (val.powf(gamma) * 255.0).clamp(0.0, 255.0);
+        pixel[0] = corrected as u8;
+    }
+
+    let (w, h) = enhanced.dimensions();
+    DynamicImage::ImageLuma8(enhanced).resize(w * 4, h * 4, image::imageops::FilterType::Lanczos3)
 }
 
 fn process_boss_adaptive(dyn_image: &DynamicImage) -> DynamicImage {
@@ -402,4 +456,217 @@ fn adaptive_threshold(img: &GrayImage, block_size: u32) -> GrayImage {
     }
 
     result
+}
+
+// Nettoyage universel pour toutes les langues
+fn clean_ocr_text_universal(text: &str) -> String {
+    text.trim()
+        .chars()
+        .filter(|c| {
+            // Garder :
+            // - Lettres de toutes langues (Unicode)
+            // - Espaces
+            // - Apostrophes, tirets
+            // - Caractères de ponctuation commune dans les noms
+            c.is_alphabetic()
+                || c.is_whitespace()
+                || *c == '\''
+                || *c == '-'
+                || *c == ','
+                || *c == ':'
+                || *c == '.'
+                || *c == '('
+                || *c == ')'
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// Score de qualité universel (pas de langue spécifique)
+fn calculate_universal_text_quality(cleaned: &str, original: &str) -> f64 {
+    let mut score = 0.0;
+
+    // 1. LONGUEUR : Les noms de boss ont généralement 5-60 caractères
+    let len = cleaned.len();
+    if len >= 8 && len <= 50 {
+        score += 15.0; // Longueur optimale
+    } else if len >= 5 && len <= 70 {
+        score += 8.0; // Acceptable
+    } else if len < 5 {
+        return 0.0; // Trop court
+    } else {
+        score -= 5.0; // Trop long
+    }
+
+    // 2. NOMBRE DE MOTS : généralement 1-6 mots
+    let word_count = cleaned.split_whitespace().count();
+    if word_count >= 2 && word_count <= 5 {
+        score += 10.0; // Optimal
+    } else if word_count == 1 {
+        score += 5.0; // Un seul mot acceptable
+    } else if word_count > 6 {
+        score -= 5.0; // Trop de mots suspects
+    }
+
+    // 3. RATIO LETTRES vs TOTAL (doit être élevé)
+    let letter_count = cleaned.chars().filter(|c| c.is_alphabetic()).count();
+    let letter_ratio = letter_count as f64 / cleaned.len() as f64;
+    score += letter_ratio * 20.0; // Max 20 points
+
+    // 4. PÉNALITÉS pour caractères vraiment suspects (jamais dans des noms)
+    let highly_suspicious = [
+        '&', '@', '#', '$', '%', '*', '=', '+', '<', '>', '|', '\\', '/', '^', '~', '`', '{', '}',
+        '[', ']', ';',
+    ];
+    let suspicious_count = cleaned
+        .chars()
+        .filter(|c| highly_suspicious.contains(c))
+        .count();
+    score -= suspicious_count as f64 * 8.0;
+
+    // 5. PÉNALITÉ pour trop de chiffres (rare dans les noms)
+    let digit_count = cleaned.chars().filter(|c| c.is_numeric()).count();
+    if digit_count > 2 {
+        score -= digit_count as f64 * 3.0;
+    }
+
+    // 6. BONUS si commence par une majuscule (universel)
+    if cleaned.chars().next().map_or(false, |c| c.is_uppercase()) {
+        score += 5.0;
+    }
+
+    // 7. PÉNALITÉ si beaucoup de différence entre original et nettoyé
+    // (indique beaucoup de caractères invalides supprimés)
+    let cleaning_diff = original.len().abs_diff(cleaned.len());
+    if cleaning_diff > 15 {
+        score -= (cleaning_diff as f64) * 0.3;
+    }
+
+    // 8. DÉTECTION de patterns répétitifs (artefacts OCR)
+    if has_repetitive_patterns(cleaned) {
+        score -= 12.0;
+    }
+
+    // 9. BONUS pour diversité des caractères (pas juste "aaaaa")
+    let unique_chars = cleaned
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let total_letters = cleaned.chars().filter(|c| c.is_alphabetic()).count();
+    if total_letters > 0 {
+        let diversity = unique_chars as f64 / total_letters as f64;
+        if diversity > 0.4 && !has_consecutive_duplicates(cleaned) {
+            score += 5.0; // Bonne diversité
+        }
+    }
+
+    // 10. PÉNALITÉ pour sequences de ponctuation multiple
+    if cleaned.contains("..") || cleaned.contains("--") || cleaned.contains(",,") {
+        score -= 5.0;
+    }
+
+    // 11. BONUS si contient des espaces (noms composés courants)
+    if cleaned.contains(' ') {
+        score += 3.0;
+    }
+    if has_suspicious_final_duplication(cleaned) {
+        score -= 8.0; // pénalité FORTE
+    }
+
+    score.max(0.0)
+}
+
+// Détecte les patterns répétitifs suspects (universel)
+fn has_repetitive_patterns(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 4 {
+        return false;
+    }
+
+    // Vérifier répétitions de 3+ caractères identiques
+    for i in 0..chars.len().saturating_sub(2) {
+        if chars[i] == chars[i + 1] && chars[i] == chars[i + 2] {
+            return true;
+        }
+    }
+
+    // Vérifier patterns AB-AB-AB
+    for i in 0..chars.len().saturating_sub(5) {
+        if chars[i] == chars[i + 2] && chars[i] == chars[i + 4] && chars[i + 1] == chars[i + 3] {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn process_boss_gamma(dyn_image: &DynamicImage, gamma: f32) -> DynamicImage {
+    let gray = dyn_image.to_luma8();
+    let mut enhanced = gray.clone();
+
+    for pixel in enhanced.pixels_mut() {
+        let val = pixel[0] as f32 / 255.0;
+        let corrected = (val.powf(gamma) * 255.0).clamp(0.0, 255.0);
+        pixel[0] = corrected as u8;
+    }
+
+    let (w, h) = enhanced.dimensions();
+    DynamicImage::ImageLuma8(enhanced).resize(w * 4, h * 4, image::imageops::FilterType::Lanczos3)
+}
+
+fn process_boss_gamma_contrast(
+    dyn_image: &DynamicImage,
+    gamma: f32,
+    contrast: f32,
+) -> DynamicImage {
+    let gray = dyn_image.to_luma8();
+    let mut enhanced = gray.clone();
+
+    for pixel in enhanced.pixels_mut() {
+        let val = pixel[0] as f32 / 255.0;
+        let gamma_corrected = val.powf(gamma);
+        let contrasted = ((gamma_corrected - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
+        pixel[0] = (contrasted * 255.0) as u8;
+    }
+
+    let (w, h) = enhanced.dimensions();
+    DynamicImage::ImageLuma8(enhanced).resize(w * 4, h * 4, image::imageops::FilterType::Lanczos3)
+}
+
+fn has_suspicious_final_duplication(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n < 3 {
+        return false;
+    }
+
+    // Dernier caractère répété
+    chars[n - 1] == chars[n - 2]
+}
+
+fn has_consecutive_duplicates(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    for i in 0..chars.len().saturating_sub(1) {
+        if chars[i] == chars[i + 1] {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_boss_detection() {
+        let img = image::open("all_image.png").unwrap();
+        let bosses = get_boss_names(img).await.unwrap();
+
+        println!("Bosses détectés : {:?}", bosses);
+        assert!(!bosses.is_empty(), "Aucun boss détecté !");
+    }
 }

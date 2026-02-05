@@ -65,13 +65,13 @@ pub struct App {
 impl App {
     pub fn new() -> App {
         let mut recorders = {
-            #[cfg(feature = "debug")]
+            #[cfg(feature = "no_save")]
             {
                 println!("🐛 Mode DEBUG activé - pas de chargement des données");
                 Vec::new()
             }
 
-            #[cfg(not(feature = "debug"))]
+            #[cfg(not(feature = "no_save"))]
             {
                 Storage::load_recorders().unwrap_or_default()
             }
@@ -149,12 +149,12 @@ impl App {
 
             MessageApp::AutosaveTick => {
                 if self.dirty {
-                    #[cfg(feature = "debug")]
+                    #[cfg(feature = "no_save")]
                     {
                         println!("🐛 Mode DEBUG - sauvegarde ignorée");
                     }
 
-                    #[cfg(not(feature = "debug"))]
+                    #[cfg(not(feature = "no_save"))]
                     {
                         println!("💾 Autosave!");
                         let _ = Storage::save_recorders(&self.recorders);
