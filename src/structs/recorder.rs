@@ -70,9 +70,9 @@ impl Recorder {
         self.counter = 0;
     }
 
-    // pub fn set_title(&mut self, title: String) {
-    //     self.title = title;
-    // }
+    pub fn set_title(&mut self, title: String) {
+        self.title = title;
+    }
     pub fn get_title(&self) -> String {
         self.title.clone()
     }

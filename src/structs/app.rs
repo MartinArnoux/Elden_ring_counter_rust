@@ -1,23 +1,28 @@
-use crate::hotkey::{GlobalHotkey, Key, Modifier, WindowsHotkey};
-use crate::ocr::ocr::detect_death;
-use crate::ocr::ocr::get_boss_names;
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
-use iced::{Color, stream};
+use crate::utils::app_worker::{hotkey_worker, ocr_worker};
+use iced::Color;
+use iced::widget::{Container, Row};
 use iced::{
     Element, Length, Subscription,
     time::Duration,
     widget::{button, column, container, row, scrollable, text, text_input, toggler},
 };
-use std::thread::spawn;
+use iced_aw::Spinner;
+use iced_core::widget::Text;
 use strsim::normalized_levenshtein;
-use tokio::sync::mpsc::unbounded_channel;
 use uuid::Uuid;
+#[derive(Clone, Debug)]
+pub enum ActionOCR {
+    SearchingDeath,
+    SearchingBossName,
+    EndingAction,
+}
 
 #[derive(Clone, Debug)]
 pub enum StatusOCR {
     Starting,
-    Started,
+    Started(ActionOCR),
     Stopped,
 }
 
@@ -42,6 +47,10 @@ pub enum MessageApp {
     IncrementCounter(Uuid),
     DecrementCounter(Uuid),
     ResetCounter(Uuid),
+    ChangeActionOCR(ActionOCR),
+    StartEditingRecorderTitle(Uuid),
+    UpdateRecorderTitle(String),
+    EndEditingRecorderTitle(Uuid),
 }
 
 #[derive(Default, Clone, Debug)]
@@ -60,6 +69,8 @@ pub struct App {
     dirty: bool,
     ocr_activate: bool,
     ocr_status: StatusOCR,
+    edit_input_recorder_uuid: Option<Uuid>,
+    edit_input_recorder_title: String,
 }
 
 impl App {
@@ -86,6 +97,8 @@ impl App {
             dragging: None,
             ocr_activate: false,
             ocr_status: StatusOCR::Stopped,
+            edit_input_recorder_uuid: None,
+            edit_input_recorder_title: String::new(),
         }
     }
 
@@ -208,10 +221,9 @@ impl App {
             MessageApp::StartingOCR => {
                 self.ocr_status = StatusOCR::Starting;
                 println!("🤖 OCR starting !");
-                println!("self ocr_status: {:?}", self.ocr_status);
             }
             MessageApp::OCROK => {
-                self.ocr_status = StatusOCR::Started;
+                self.ocr_status = StatusOCR::Started(ActionOCR::SearchingDeath);
                 println!("🤖 OCR started !");
             }
             MessageApp::IncrementCounter(uuid) => {
@@ -225,6 +237,28 @@ impl App {
             MessageApp::ResetCounter(uuid) => {
                 self.reset_counter(uuid);
                 self.dirty();
+            }
+            MessageApp::ChangeActionOCR(status) => {
+                println!("🤖 OCR status changed to {:?}", status);
+                self.ocr_status = StatusOCR::Started(status);
+            }
+            MessageApp::UpdateRecorderTitle(value) => {
+                self.edit_input_recorder_title = value;
+            }
+
+            MessageApp::EndEditingRecorderTitle(uuid) => {
+                if let Some(recorder) = self.recorders.iter_mut().find(|r| r.get_uuid() == &uuid) {
+                    recorder.set_title(self.edit_input_recorder_title.clone());
+                    self.edit_input_recorder_uuid = None;
+                    self.edit_input_recorder_title.clear();
+                    self.dirty();
+                }
+            }
+            MessageApp::StartEditingRecorderTitle(uuid) => {
+                if let Some(recorder) = self.recorders.iter().find(|r| r.get_uuid() == &uuid) {
+                    self.edit_input_recorder_uuid = Some(uuid);
+                    self.edit_input_recorder_title = recorder.get_title().to_string();
+                }
             }
         };
     }
@@ -469,7 +503,29 @@ impl App {
                 recorders_list = recorders_list.push(global_container);
                 continue;
             }
+            let is_editing = self.edit_input_recorder_uuid == Some(*uuid);
 
+            let title_widget: Element<MessageApp> = if is_editing {
+                // Mode édition : afficher un input
+                text_input("Titre", &self.edit_input_recorder_title)
+                    .on_input(MessageApp::UpdateRecorderTitle)
+                    .on_submit(MessageApp::EndEditingRecorderTitle(*uuid))
+                    .width(Length::Fill)
+                    .into()
+            } else {
+                // Mode normal : afficher un bouton cliquable
+                button(text(recorder.get_title()).size(20))
+                    .on_press(MessageApp::StartEditingRecorderTitle(*uuid))
+                    .padding(0)
+                    .style(|_theme, _status| button::Style {
+                        background: None,
+                        border: iced::Border::default(),
+                        text_color: Color::WHITE,
+                        ..Default::default()
+                    })
+                    .width(Length::Fill)
+                    .into()
+            };
             // Affichage NORMAL pour les compteurs classiques
             let recorder_row = row![
                 button(if is_dragging { "✕" } else { "☰" }).on_press(if is_dragging {
@@ -477,6 +533,7 @@ impl App {
                 } else {
                     MessageApp::StartDrag(index)
                 }),
+                title_widget,
                 text(recorder.get_title()).size(20).width(Length::Fill),
                 button(text("⟲").size(18)).on_press(MessageApp::ResetCounter(*uuid)),
                 button("-").on_press(MessageApp::DecrementCounter(*uuid)),
@@ -528,10 +585,41 @@ impl App {
         }
         let scrollable_recorders = scrollable(recorders_list).height(Length::Fill);
 
-        let (ocr_status_text, ocr_status_color) = match &self.ocr_status {
-            StatusOCR::Starting => ("Démarrage...".to_string(), Color::from_rgb(1.0, 0.65, 0.0)), // orange
-            StatusOCR::Started => ("OCR démarré".to_string(), Color::from_rgb(0.0, 0.8, 0.0)), // vert
-            StatusOCR::Stopped => ("OCR arrêté".to_string(), Color::from_rgb(0.6, 0.6, 0.6)), // gris
+        let ocr_status: Element<MessageApp> = match &self.ocr_status {
+            StatusOCR::Starting => text("Démarrage...")
+                .color(Color::from_rgb(1.0, 0.65, 0.0))
+                .size(16)
+                .into(),
+            StatusOCR::Started(ActionOCR::SearchingBossName) => {
+                Row::new()
+                    .spacing(5)
+                    .width(Length::Shrink)
+                    .height(Length::Shrink)
+                    .push(
+                        Text::new("Recherche du nom du boss...")
+                            .color(Color::from_rgb(0.0, 0.8, 0.0))
+                            .size(16),
+                    )
+                    .push(
+                        Container::new(Spinner::new())
+                            .width(Length::Fixed(20 as f32)) // fixed width
+                            .height(Length::Fixed(20 as f32)), // fixed height
+                    )
+                    .into()
+            }
+            StatusOCR::Started(ActionOCR::EndingAction) => text("OCR démarré - sleeping a bit")
+                .color(Color::from_rgb(0.0, 0.8, 0.0))
+                .into(),
+            StatusOCR::Started(ActionOCR::SearchingDeath) => {
+                text("Recherche de ta mort .... ça arrive")
+                    .color(Color::from_rgb(0.0, 0.8, 0.0))
+                    .size(16)
+                    .into()
+            }
+            StatusOCR::Stopped => text("OCR arrêté")
+                .color(Color::from_rgb(0.6, 0.6, 0.6))
+                .size(16)
+                .into(),
         };
 
         let content = column![
@@ -541,7 +629,7 @@ impl App {
             ]
             .spacing(10),
             // Texte du statut OCR avec couleur
-            text(ocr_status_text).color(ocr_status_color).size(16),
+            ocr_status,
             scrollable_recorders,
             button("➕ Ajouter un recorder").on_press(MessageApp::ChangeView(Screen::AddRecorder))
         ]
@@ -586,162 +674,6 @@ impl App {
         }
         false
     }
-}
-
-// Worker qui écoute les hotkeys Windows et les transmet à Iced
-//
-// Architecture :
-// 1. Thread Windows (sync) écoute les hotkeys via RegisterHotKey API
-// 2. Envoie via tokio::mpsc (unbounded car le thread est sync, pas de .await)
-// 3. Task async (dans stream::channel) reçoit et transfère à Iced
-// 4. stream::channel crée un Stream compatible Iced avec cycle de vie géré
-//
-// Pourquoi 2 channels ?
-// - tokio::mpsc : Thread sync ne peut pas utiliser stream::channel directement
-// - stream::channel : Protocole Iced, crée un Stream avec lifecycle management
-fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
-    use iced::futures::sink::SinkExt;
-
-    stream::channel(
-        100,
-        |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
-            println!("🎧 Démarrage du hotkey worker...");
-
-            // Créer le channel tokio pour recevoir les MessageApp du thread Windows
-            let (hotkey_tx, mut hotkey_rx) = unbounded_channel();
-
-            // Spawn le thread Windows qui envoie déjà des MessageApp::Increment
-            spawn(move || {
-                let hotkey_manager = WindowsHotkey::new(hotkey_tx);
-
-                match hotkey_manager.register(&[Modifier::SHIFT], Key::Plus) {
-                    Ok(_) => println!("✅ Hotkey Ctrl+Plus registered"),
-                    Err(e) => eprintln!("❌ Register failed: {:?}", e),
-                }
-
-                println!("🔄 Démarrage de l'event loop Windows...");
-                hotkey_manager.event_loop();
-            });
-
-            // Boucle simple : transférer les MessageApp du thread Windows vers Iced
-            loop {
-                match hotkey_rx.recv().await {
-                    Some(msg) => {
-                        // Le message est déjà un MessageApp::Increment, on le transfère tel quel
-                        println!("📨 Message reçu du thread Windows : {:?}", msg);
-                        let _ = output.send(msg).await;
-                    }
-                    None => {
-                        println!("❌ Channel hotkey fermé");
-                        break;
-                    }
-                }
-            }
-
-            println!("⚠️ Hotkey worker terminé");
-        },
-    )
-}
-
-fn ocr_worker() -> impl iced::futures::Stream<Item = MessageApp> {
-    use iced::futures::sink::SinkExt;
-
-    stream::channel(
-        100,
-        |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
-            println!("🎧 Démarrage du OCR worker (détection mort)...");
-
-            /*#[cfg(target_os = "windows")]
-            {
-                use windows::Win32::System::Threading::*;
-                unsafe {
-                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-                }
-            }*/
-
-            //tokio::time::sleep(Duration::from_secs(3)).await;
-            let _ = output.send(MessageApp::StartingOCR).await;
-
-            let mut last_death_time = std::time::Instant::now();
-
-            let _ = output.send(MessageApp::OCROK).await;
-            let mut start = true;
-            let target_interval = Duration::from_millis(500); // 500ms = 2 scans/seconde
-
-            loop {
-                let loop_start = std::time::Instant::now();
-                match detect_death().await {
-                    Ok(Some(dyn_image)) => {
-                        let elapsed = loop_start.elapsed();
-
-                        println!("DetectDeath! after {:?}", elapsed);
-                        println!(
-                            "Last death time : {:?}",
-                            last_death_time.elapsed().as_secs()
-                        );
-                        let test_death = last_death_time.elapsed().as_secs() > 5 || start;
-                        start = false;
-                        println!("test death : {:?}", test_death);
-                        if test_death {
-                            println!("💀 MORT DÉTECTÉE !");
-                            let _ = output.send(MessageApp::DeathDetected).await;
-
-                            // ✅ ATTENDRE que l'écran se stabilise
-                            //tokio::time::sleep(Duration::from_secs(1)).await;
-
-                            // ✅ NOUVELLE CAPTURE pour les boss (pas réutiliser la même)
-                            println!("Elapsed before boss detection: {:?}", loop_start.elapsed());
-                            match get_boss_names(dyn_image.clone()).await {
-                                Ok(bosses) => {
-                                    println!("⚔️ Boss trouvés : {:?}", bosses);
-                                    let _ = output.send(MessageApp::BossesFoundOCR(bosses)).await;
-                                }
-                                Err(e) => {
-                                    eprintln!("❌ Erreur détection boss : {}", e);
-                                    let _ = output.send(MessageApp::BossesFoundOCR(vec![])).await;
-                                }
-                            }
-
-                            last_death_time = std::time::Instant::now();
-
-                            // ✅ PAUSE de 8 secondes après une mort
-                            tokio::time::sleep(Duration::from_secs(8)).await;
-                        }
-                        let elapsed = loop_start.elapsed();
-
-                        println!("end death detection {:?}", elapsed);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        eprintln!("❌ Erreur OCR : {}", e);
-
-                        // ✅ PAUSE plus longue en cas d'erreur (réduire la charge)
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                    }
-                }
-
-                let elapsed = loop_start.elapsed();
-                if elapsed < target_interval {
-                    let sleep_duration = target_interval - elapsed;
-                    #[cfg(feature = "timing")]
-                    {
-                        println!("⏱️ OCR: {:?}, Sleep: {:?}", elapsed, sleep_duration);
-                    }
-                    tokio::time::sleep(sleep_duration).await;
-                } else {
-                    #[cfg(feature = "timing")]
-                    {
-                        println!(
-                            "⚠️ OCR trop lent: {:?} (target: {:?})",
-                            elapsed, target_interval
-                        );
-                    }
-
-                    // Pas de sleep, continuer directement
-                }
-            }
-        },
-    )
 }
 
 #[cfg(test)]
