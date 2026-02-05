@@ -10,9 +10,11 @@ macro_rules! lap {
 }
 use std::collections::HashMap;
 
+use crate::structs::settings::crop_position::CropPosition;
 use image::{DynamicImage, GrayImage, ImageBuffer, Luma, RgbaImage};
 use uni_ocr::{OcrEngine, OcrProvider};
 use xcap::Monitor;
+
 // ============================================================================
 // FONCTIONS DE PRÉTRAITEMENT
 // ============================================================================
@@ -41,7 +43,7 @@ fn increase_contrast(img: &GrayImage, factor: f32) -> GrayImage {
 // CAPTURE D'ÉCRAN
 // ============================================================================
 
-fn capture_screen(monitor_index: usize) -> Result<(DynamicImage, u32, u32), String> {
+pub fn capture_screen(monitor_index: usize) -> Result<(DynamicImage, u32, u32), String> {
     let monitors = Monitor::all().map_err(|e| format!("Erreur Monitor::all: {}", e))?;
 
     let monitor = monitors
@@ -121,8 +123,6 @@ fn preprocess_v1_fast(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage {
 fn preprocess_v2_fallback(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage {
     use std::time::Instant;
 
-    lap!(t, "PREPROCESS | ── Version 2 (FALLBACK)");
-
     let _t = Instant::now();
     let gamma = adjust_gamma(red, 0.3);
     lap!(_t, "PREPROCESS |   gamma 0.3          {:>6} ms");
@@ -166,52 +166,44 @@ fn preprocess_v2_fallback(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage 
 // DÉTECTION DE MORT (avec pré-filtre)
 // ============================================================================
 
-pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
+pub async fn detect_death(
+    full_screen: &DynamicImage,
+    death_zone_config: &CropPosition,
+) -> Result<bool, String> {
     let _t0 = std::time::Instant::now();
 
-    // ───────────────── Capture écran
+    // ───────────────── Crop de la zone de mort
     let _t = std::time::Instant::now();
-    let (dyn_image, w, h) = tokio::task::spawn_blocking(|| capture_screen(1))
-        .await
-        .map_err(|e| format!("Erreur join: {}", e))?
-        .map_err(|e| format!("Erreur capture: {}", e))?;
-    lap!(_t, "Capture écran");
-
-    // ───────────────── Crop
-    let _t = std::time::Instant::now();
-    let crop_x = (w * 31) / 100;
-    let crop_y = (h * 46) / 100;
-    let crop_width = (w * 39) / 100;
-    let crop_height = (h * 10) / 100;
-    let dead_zone = dyn_image.crop_imm(crop_x, crop_y, crop_width, crop_height);
+    let death_zone = death_zone_config.crop_image(full_screen);
     lap!(_t, "Crop zone");
 
     // ───────────────── Save debug crop
     #[cfg(feature = "debug")]
     {
         let _t = std::time::Instant::now();
-        dead_zone.save("crop_dead_zone.png").ok();
+        death_zone.save("crop_dead_zone.png").ok();
         lap!(_t, "Save crop (disk)");
     }
+
     // ───────────────── Pré-filtre rouge
     let _t = std::time::Instant::now();
-    if !has_red_text_present(&dead_zone) {
-        lap!(t, "Pré-filtre rouge (FAIL)");
-        lap!(t0, "TOTAL detect_death");
-        return Ok(None);
+    if !has_red_text_present(&death_zone) {
+        lap!(_t, "Pré-filtre rouge (FAIL)");
+        lap!(_t0, "TOTAL detect_death");
+        return Ok(false);
     }
     lap!(_t, "Pré-filtre rouge (OK)");
 
     // ───────────────── Save écran complet
     #[cfg(feature = "debug")]
     {
-        let t = std::time::Instant::now();
-        dyn_image.save("all_screen_at_death.png").ok();
-        lap!(t, "Save screen (disk)");
+        let _t = std::time::Instant::now();
+        full_screen.save("all_screen_at_death.png").ok();
+        lap!(_t, "Save screen (disk)");
     }
+
     // ───────────────── Préprocess OCR
     let _t = std::time::Instant::now();
-    //let versions = preprocess_death_text_optimized(&dead_zone);
     lap!(_t, "Preprocess OCR");
 
     // ───────────────── Engine OCR
@@ -220,45 +212,66 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
     lap!(_t, "Init OCR engine");
 
     // ───────────────── Preprocess + OCR V1
-    let red = extract_red_channel(&dead_zone);
-
+    let red = extract_red_channel(&death_zone);
     let v1 = preprocess_v1_fast(&red);
-    if ocr_check(&engine, &v1, "OCR version 1").await {
+    let (ok_v1, score_v1) = ocr_check(&engine, &v1, "OCR version 1").await;
+    if ok_v1 {
         lap!(_t0, "TOTAL detect_death");
-        return Ok(Some(dyn_image));
+        return Ok(true);
     }
 
     let v2 = preprocess_v2_fallback(&red);
-    if ocr_check(&engine, &v2, "OCR version 2").await {
+    let (ok_v2, score_v2) = ocr_check(&engine, &v2, "OCR version 2").await;
+    if ok_v2 {
         lap!(_t0, "TOTAL detect_death");
-        return Ok(Some(dyn_image));
+        return Ok(true);
     }
 
-    return Ok(None);
+    if score_v1 > 35.0 && score_v2 > 35.0 {
+        #[cfg(feature = "debug")]
+        {
+            lap!(_t0, "TOTAL detect_death");
+            println!("OCR V1 score: {}", score_v1);
+            println!("OCR V2 score: {}", score_v2);
+        }
+        return Ok(true);
+    }
+
+    #[cfg(feature = "debug")]
+    {
+        println!("rouge mais pas death");
+        death_zone.save("death_zone.png");
+        v1.save("death_v1.png");
+        v2.save("death_v2.png");
+    }
+    Ok(false)
 }
 
-async fn ocr_check(engine: &OcrEngine, image: &DynamicImage, _label: &str) -> bool {
+async fn ocr_check(engine: &OcrEngine, image: &DynamicImage, _label: &str) -> (bool, f64) {
     let _t = std::time::Instant::now();
 
     let detected = match engine.recognize_image(image).await {
         Ok((text, _, _)) => is_death_text(&text),
-        Err(_) => false,
+        Err(_) => (false, 0.0),
     };
-
     lap!(_t, _label);
     detected
 }
-fn is_death_text(text: &str) -> bool {
+fn is_death_text(text: &str) -> (bool, f64) {
     let upper = text.to_uppercase();
     let normalized = upper
         .replace("Ü", "U")
         .replace("È", "E")
         .replace("É", "E")
         .replace(" ", "");
+    let cleaned2 = clean_ocr_text_universal(&normalized);
 
-    upper.contains("YOU DIED")
-        || upper.contains("VOUS AVEZ PERI")
-        || normalized.contains("VOUSAVEZPERI")
+    (
+        upper.contains("YOU DIED")
+            || upper.contains("VOUS AVEZ PERI")
+            || normalized.contains("VOUSAVEZPERI"),
+        calculate_universal_text_quality(&cleaned2, &normalized),
+    )
 }
 
 // ============================================================================
@@ -266,7 +279,10 @@ fn is_death_text(text: &str) -> bool {
 // ============================================================================
 
 pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, String> {
-    println!("Début de la recherche des noms des boss");
+    #[cfg(feature = "debug")]
+    {
+        println!("Début de la recherche des noms des boss");
+    }
     let w = dyn_image.width();
     let h = dyn_image.height();
     let mut bosses = Vec::new();
