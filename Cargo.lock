@@ -12,6 +12,7 @@ dependencies = [
  "iced_core",
  "image",
  "imageproc",
+ "rayon",
  "scrap",
  "serde",
  "serde_json",

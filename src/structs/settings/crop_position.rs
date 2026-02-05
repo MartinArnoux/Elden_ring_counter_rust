@@ -1,7 +1,7 @@
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, Copy)]
 pub struct CropPosition {
     pub x_percent: u32,
     pub y_percent: u32,
