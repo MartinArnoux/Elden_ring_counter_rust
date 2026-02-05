@@ -179,18 +179,20 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
 
     // ───────────────── Crop
     let _t = std::time::Instant::now();
-    let crop_x = (w * 33) / 100;
+    let crop_x = (w * 31) / 100;
     let crop_y = (h * 46) / 100;
-    let crop_width = (w * 35) / 100;
+    let crop_width = (w * 39) / 100;
     let crop_height = (h * 10) / 100;
     let dead_zone = dyn_image.crop_imm(crop_x, crop_y, crop_width, crop_height);
     lap!(_t, "Crop zone");
 
     // ───────────────── Save debug crop
-    let _t = std::time::Instant::now();
-    dead_zone.save("crop_dead_zone.png").ok();
-    lap!(_t, "Save crop (disk)");
-
+    #[cfg(feature = "debug")]
+    {
+        let _t = std::time::Instant::now();
+        dead_zone.save("crop_dead_zone.png").ok();
+        lap!(_t, "Save crop (disk)");
+    }
     // ───────────────── Pré-filtre rouge
     let _t = std::time::Instant::now();
     if !has_red_text_present(&dead_zone) {
@@ -201,10 +203,12 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
     lap!(_t, "Pré-filtre rouge (OK)");
 
     // ───────────────── Save écran complet
-    // let t = std::time::Instant::now();
-    // dyn_image.save("all_screen_at_death.png").ok();
-    // lap!(t, "Save screen (disk)");
-
+    #[cfg(feature = "debug")]
+    {
+        let t = std::time::Instant::now();
+        dyn_image.save("all_screen_at_death.png").ok();
+        lap!(t, "Save screen (disk)");
+    }
     // ───────────────── Préprocess OCR
     let _t = std::time::Instant::now();
     //let versions = preprocess_death_text_optimized(&dead_zone);
