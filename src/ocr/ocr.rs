@@ -41,35 +41,20 @@ fn increase_contrast(img: &GrayImage, factor: f32) -> GrayImage {
 // CAPTURE D'ÉCRAN
 // ============================================================================
 
-fn capture_screen() -> Result<(DynamicImage, u32, u32), String> {
-    // Récupérer tous les écrans
+fn capture_screen(monitor_index: usize) -> Result<(DynamicImage, u32, u32), String> {
     let monitors = Monitor::all().map_err(|e| format!("Erreur Monitor::all: {}", e))?;
 
-    let mut primary = None;
+    let monitor = monitors
+        .into_iter()
+        .nth(monitor_index)
+        .ok_or(format!("Écran {} non trouvé", monitor_index))?;
 
-    for m in monitors {
-        match m.is_primary() {
-            Ok(true) => {
-                primary = Some(m);
-                break;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                eprintln!("⚠️ Erreur is_primary: {}", e);
-            }
-        }
-    }
-
-    let monitor = primary.ok_or("Aucun écran principal détecté")?;
-    // Capture
     let image = monitor
         .capture_image()
         .map_err(|e| format!("Erreur capture écran: {}", e))?;
 
     let width = image.width();
     let height = image.height();
-
-    // xcap fournit déjà du RGBA
     let rgba =
         RgbaImage::from_raw(width, height, image.into_raw()).ok_or("Buffer RGBA invalide")?;
 
@@ -186,7 +171,7 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
 
     // ───────────────── Capture écran
     let _t = std::time::Instant::now();
-    let (dyn_image, w, h) = tokio::task::spawn_blocking(|| capture_screen())
+    let (dyn_image, w, h) = tokio::task::spawn_blocking(|| capture_screen(1))
         .await
         .map_err(|e| format!("Erreur join: {}", e))?
         .map_err(|e| format!("Erreur capture: {}", e))?;
@@ -201,10 +186,10 @@ pub async fn detect_death() -> Result<Option<DynamicImage>, String> {
     let dead_zone = dyn_image.crop_imm(crop_x, crop_y, crop_width, crop_height);
     lap!(_t, "Crop zone");
 
-    // // ───────────────── Save debug crop
-    // let t = std::time::Instant::now();
-    // dead_zone.save("crop_dead_zone.png").ok();
-    // lap!(t, "Save crop (disk)");
+    // ───────────────── Save debug crop
+    let _t = std::time::Instant::now();
+    dead_zone.save("crop_dead_zone.png").ok();
+    lap!(_t, "Save crop (disk)");
 
     // ───────────────── Pré-filtre rouge
     let _t = std::time::Instant::now();
@@ -277,6 +262,7 @@ fn is_death_text(text: &str) -> bool {
 // ============================================================================
 
 pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, String> {
+    println!("Début de la recherche des noms des boss");
     let w = dyn_image.width();
     let h = dyn_image.height();
     let mut bosses = Vec::new();
@@ -386,76 +372,6 @@ pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, Stri
     }
 
     Ok(bosses)
-}
-fn process_boss_simple(dyn_image: &DynamicImage, gamma: f32) -> DynamicImage {
-    let gray = dyn_image.to_luma8();
-    let mut enhanced = gray.clone();
-
-    for pixel in enhanced.pixels_mut() {
-        let val = pixel[0] as f32 / 255.0;
-        let corrected = (val.powf(gamma) * 255.0).clamp(0.0, 255.0);
-        pixel[0] = corrected as u8;
-    }
-
-    let (w, h) = enhanced.dimensions();
-    DynamicImage::ImageLuma8(enhanced).resize(w * 4, h * 4, image::imageops::FilterType::Lanczos3)
-}
-
-fn process_boss_adaptive(dyn_image: &DynamicImage) -> DynamicImage {
-    let gray = dyn_image.to_luma8();
-    let binary = adaptive_threshold(&gray, 25);
-
-    let (w, h) = binary.dimensions();
-    DynamicImage::ImageLuma8(binary).resize(w * 3, h * 3, image::imageops::FilterType::Lanczos3)
-}
-
-fn process_boss_contrast(dyn_image: &DynamicImage, factor: f32) -> DynamicImage {
-    let gray = dyn_image.to_luma8();
-    let contrasted = increase_contrast(&gray, factor);
-
-    let (w, h) = contrasted.dimensions();
-    DynamicImage::ImageLuma8(contrasted).resize(w * 3, h * 3, image::imageops::FilterType::Lanczos3)
-}
-
-fn adaptive_threshold(img: &GrayImage, block_size: u32) -> GrayImage {
-    let (width, height) = img.dimensions();
-    let mut result = GrayImage::new(width, height);
-    let half_block = block_size / 2;
-
-    for y in 0..height {
-        for x in 0..width {
-            let y_start = y.saturating_sub(half_block);
-            let y_end = (y + half_block + 1).min(height);
-            let x_start = x.saturating_sub(half_block);
-            let x_end = (x + half_block + 1).min(width);
-
-            let mut sum = 0u32;
-            let mut count = 0u32;
-
-            for ly in y_start..y_end {
-                for lx in x_start..x_end {
-                    sum += img.get_pixel(lx, ly)[0] as u32;
-                    count += 1;
-                }
-            }
-
-            let local_mean = (sum / count) as u8;
-            let pixel_value = img.get_pixel(x, y)[0];
-
-            // Si le pixel est plus sombre que la moyenne locale - 10, c'est du texte
-            result.put_pixel(
-                x,
-                y,
-                Luma([if pixel_value < local_mean.saturating_sub(10) {
-                    0
-                } else {
-                    255
-                }]),
-            );
-        }
-    }
-
-    result
 }
 
 // Nettoyage universel pour toutes les langues
