@@ -99,9 +99,12 @@ pub fn ocr_worker(
             let _ = output.send(MessageApp::OCROK).await;
             let mut start = true;
             let target_interval = Duration::from_millis(500); // 500ms = 2 scans/seconde
+            let target_sleep_after_death = Duration::from_secs(10);
             let mut status = ActionOCR::SearchingDeath;
-
+            let death_zone = game_config.get_death_zone().clone();
+            let boss_zones = game_config.get_boss_zones().clone();
             loop {
+                let mut found_death = false;
                 if let ActionOCR::EndingAction = status {
                     let _ = output
                         .send(MessageApp::ChangeActionOCR(ActionOCR::SearchingDeath))
@@ -117,9 +120,9 @@ pub fn ocr_worker(
                         continue;
                     }
                 };
-
-                match detect_death(&full_screen, &game_config.get_death_zone()).await {
+                match detect_death(&full_screen, &death_zone).await {
                     Ok(true) => {
+                        found_death = true;
                         println!("DetectDeath! after {:?}", loop_start.elapsed());
                         println!(
                             "Last death time : {:?}",
@@ -144,14 +147,14 @@ pub fn ocr_worker(
                             // 🔥 RUN BOSS OCR IN PARALLEL (no UI blocking)
                             let mut output_clone = output.clone();
                             let dyn_image_clone = full_screen.clone();
-
+                            let boss_zones_clone = boss_zones.clone();
                             let handler = tokio::spawn(async move {
                                 println!(
                                     "Elapsed before boss detection: {:?}",
                                     loop_start.elapsed()
                                 );
 
-                                match get_boss_names(dyn_image_clone).await {
+                                match get_boss_names(dyn_image_clone, boss_zones_clone).await {
                                     Ok(bosses) => {
                                         println!("⚔️ Boss trouvés : {:?}", bosses);
                                         let _ = output_clone
@@ -179,7 +182,12 @@ pub fn ocr_worker(
                             last_death_time = Instant::now();
 
                             // cooldown AFTER scheduling OCR
-                            tokio::time::sleep(Duration::from_secs(8)).await;
+                            //tokio::time::sleep(Duration::from_secs(8)).await;
+                            #[cfg(any(feature = "debug", feature = "timing"))]
+                            {
+                                let _ = output.send(MessageApp::ActivateOCR(false)).await;
+                                println!("End of Boss OCR task");
+                            }
                         }
 
                         println!("end death detection {:?}", loop_start.elapsed());
@@ -194,8 +202,13 @@ pub fn ocr_worker(
                 }
 
                 let elapsed = loop_start.elapsed();
-                if elapsed < target_interval {
-                    let sleep_duration = target_interval - elapsed;
+                let interval = if found_death {
+                    target_sleep_after_death
+                } else {
+                    target_interval
+                };
+                if elapsed < interval {
+                    let sleep_duration = interval - elapsed;
                     #[cfg(feature = "timing")]
                     {
                         println!("⏱️ OCR: {:?}, Sleep: {:?}", elapsed, sleep_duration);

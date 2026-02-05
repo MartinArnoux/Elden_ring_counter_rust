@@ -2,15 +2,9 @@
 use image::DynamicImage;
 use image::RgbaImage;
 use xcap::Monitor;
-macro_rules! lap {
-    ($start:expr, $label:expr) => {{
-        #[cfg(feature = "timing")]
-        {
-            let elapsed = $start.elapsed();
-            println!("{:<30} {:>6} ms", $label, elapsed.as_millis());
-        }
-    }};
-}
+
+use crate::structs::settings::crop_position::CropPosition;
+
 /// Capture l'écran complet (sans crop)
 pub async fn capture_full_screen(screen: i8) -> Result<DynamicImage, String> {
     let (dyn_image, _w, _h) = tokio::task::spawn_blocking(move || capture_screen(screen))
@@ -48,4 +42,11 @@ fn capture_screen(monitor_index: i8) -> Result<(DynamicImage, u32, u32), String>
         RgbaImage::from_raw(width, height, image.into_raw()).ok_or("Buffer RGBA invalide")?;
 
     Ok((DynamicImage::ImageRgba8(rgba), width, height))
+}
+
+pub fn crop_image_crop_position(image: DynamicImage, config: CropPosition) -> DynamicImage {
+    let w = image.width();
+    let h = image.height();
+    let pixel = config.to_pixels(w, h);
+    image.crop_imm(pixel.0, pixel.1, pixel.2, pixel.3)
 }

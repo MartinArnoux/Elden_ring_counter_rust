@@ -1,166 +1,15 @@
 // ocr.rs - Version optimisée pour détection de mort uniquement
-macro_rules! lap {
-    ($start:expr, $label:expr) => {{
-        #[cfg(feature = "timing")]
-        {
-            let elapsed = $start.elapsed();
-            println!("{:<30} {:>6} ms", $label, elapsed.as_millis());
-        }
-    }};
-}
-use std::collections::HashMap;
 
 use crate::structs::settings::crop_position::CropPosition;
-use image::{DynamicImage, GrayImage, ImageBuffer, Luma, RgbaImage};
+use crate::utils::image_processing::{
+    extract_red_channel, has_red_text_present, preprocess_v1_fast, preprocess_v2_fallback,
+    process_boss_gamma, process_boss_gamma_contrast,
+};
+use crate::utils::screen_capture::crop_image_crop_position;
+use image::DynamicImage;
+use rayon::prelude::*;
+use std::collections::HashMap;
 use uni_ocr::{OcrEngine, OcrProvider};
-use xcap::Monitor;
-
-// ============================================================================
-// FONCTIONS DE PRÉTRAITEMENT
-// ============================================================================
-
-fn adjust_gamma(img: &GrayImage, gamma: f32) -> GrayImage {
-    let mut result = img.clone();
-    for pixel in result.pixels_mut() {
-        let normalized = pixel[0] as f32 / 255.0;
-        let corrected = normalized.powf(gamma);
-        pixel[0] = (corrected * 255.0) as u8;
-    }
-    result
-}
-
-fn increase_contrast(img: &GrayImage, factor: f32) -> GrayImage {
-    let mut result = img.clone();
-    for pixel in result.pixels_mut() {
-        let value = pixel[0] as f32;
-        let new_value = ((value - 128.0) * factor + 128.0).clamp(0.0, 255.0);
-        pixel[0] = new_value as u8;
-    }
-    result
-}
-
-// ============================================================================
-// CAPTURE D'ÉCRAN
-// ============================================================================
-
-pub fn capture_screen(monitor_index: usize) -> Result<(DynamicImage, u32, u32), String> {
-    let monitors = Monitor::all().map_err(|e| format!("Erreur Monitor::all: {}", e))?;
-
-    let monitor = monitors
-        .into_iter()
-        .nth(monitor_index)
-        .ok_or(format!("Écran {} non trouvé", monitor_index))?;
-
-    let image = monitor
-        .capture_image()
-        .map_err(|e| format!("Erreur capture écran: {}", e))?;
-
-    let width = image.width();
-    let height = image.height();
-    let rgba =
-        RgbaImage::from_raw(width, height, image.into_raw()).ok_or("Buffer RGBA invalide")?;
-
-    Ok((DynamicImage::ImageRgba8(rgba), width, height))
-}
-
-// ============================================================================
-// PRÉ-FILTRE RAPIDE : DÉTECTION DE ROUGE
-// ============================================================================
-
-fn has_red_text_present(image: &DynamicImage) -> bool {
-    let rgba = image.to_rgba8();
-    let mut red_pixel_count = 0;
-    let total_pixels = (image.width() * image.height()) as usize;
-    for p in rgba.pixels() {
-        let r = p[0] as i32;
-        let g = p[1] as i32;
-        let b = p[2] as i32;
-
-        // Rouge dominant sombre (Elden Ring)
-        if r > 60 && r > g + 20 && r > b + 20 {
-            red_pixel_count += 1;
-        }
-    }
-
-    let pct = red_pixel_count as f32 / total_pixels as f32;
-
-    pct > 0.01 // 1% suffit largement
-}
-
-// ============================================================================
-// PRÉTRAITEMENT OPTIMISÉ (2 versions seulement)
-// ============================================================================
-
-fn extract_red_channel(image: &DynamicImage) -> ImageBuffer<Luma<u8>, Vec<u8>> {
-    let rgba = image.to_rgba8();
-    ImageBuffer::from_fn(image.width(), image.height(), |x, y| {
-        let pixel = rgba.get_pixel(x, y);
-        Luma([pixel[0]])
-    })
-}
-
-fn preprocess_v1_fast(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage {
-    use std::time::Instant;
-
-    let _t = Instant::now();
-    let brightened = adjust_gamma(red, 0.4);
-    lap!(_t, "PREPROCESS |   gamma 0.4          {:>6} ms");
-    let (w, h) = brightened.dimensions();
-
-    const TARGET_HEIGHT: u32 = 120;
-    let scale = TARGET_HEIGHT as f32 / h as f32;
-
-    let _t = Instant::now();
-    let scaled = DynamicImage::ImageLuma8(brightened).resize(
-        (w as f32 * scale) as u32,
-        TARGET_HEIGHT,
-        image::imageops::FilterType::CatmullRom,
-    );
-    lap!(_t, "PREPROCESS |   total time         {:>6} ms");
-    scaled
-}
-
-fn preprocess_v2_fallback(red: &ImageBuffer<Luma<u8>, Vec<u8>>) -> DynamicImage {
-    use std::time::Instant;
-
-    let _t = Instant::now();
-    let gamma = adjust_gamma(red, 0.3);
-    lap!(_t, "PREPROCESS |   gamma 0.3          {:>6} ms");
-
-    let _t = Instant::now();
-    let contrast = increase_contrast(&gamma, 2.0);
-    lap!(_t, "PREPROCESS |   contrast x2.0     {:>6} ms");
-    let (w, h) = contrast.dimensions();
-
-    const TARGET_HEIGHT: u32 = 120;
-    let scale = TARGET_HEIGHT as f32 / h as f32;
-
-    let _t = Instant::now();
-    let scaled = DynamicImage::ImageLuma8(contrast).resize(
-        (w as f32 * scale) as u32,
-        TARGET_HEIGHT,
-        image::imageops::FilterType::CatmullRom,
-    );
-
-    lap!(_t, "PREPROCESS |   resize → 120px     {:>6} ms");
-
-    scaled
-}
-/* fn preprocess_death_text_optimized(image: &DynamicImage) -> (DynamicImage, DynamicImage) {
-    use std::time::Instant;
-
-    let _t0 = Instant::now();
-
-    let red = extract_red_channel(image);
-
-    lap!(t, "PREPROCESS |   extract red channel {:>6} ms");
-    let v1 = preprocess_v1_fast(&red);
-    let v2 = preprocess_v2_fallback(&red);
-
-    lap!(_t0, "════════ PREPROCESS TOTAL        {:>6} ms ════════");
-
-    (v1, v2)
-}*/
 
 // ============================================================================
 // DÉTECTION DE MORT (avec pré-filtre)
@@ -278,39 +127,122 @@ fn is_death_text(text: &str) -> (bool, f64) {
 // DÉTECTION DES BOSS (appelé seulement après détection de mort)
 // ============================================================================
 
-pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, String> {
+pub async fn get_boss_names(
+    full_screen: DynamicImage,
+    boss_zones: Vec<CropPosition>,
+) -> Result<Vec<String>, String> {
+    let _t = std::time::Instant::now();
     #[cfg(feature = "debug")]
     {
         println!("Début de la recherche des noms des boss");
     }
-    let w = dyn_image.width();
-    let h = dyn_image.height();
+
     let mut bosses = Vec::new();
 
-    let crop_x = (w * 24) / 100;
-    let crop_y = (h * 77) / 100;
-    let crop_width = (w * 53) / 100;
-    let crop_height = (h * 5) / 100;
+    #[cfg(feature = "debug")]
+    let mut debug_images = Vec::new();
 
-    let engine =
-        OcrEngine::new(OcrProvider::Auto).map_err(|e| format!("Erreur OCR Engine: {}", e))?;
+    // Traiter chaque zone séquentiellement
+    for (zone_index, zone) in boss_zones.iter().enumerate() {
+        let _t1 = std::time::Instant::now();
+        let _t0 = std::time::Instant::now();
+        let cropped = crop_image_crop_position(full_screen.clone(), *zone);
+        lap!(_t0, format!("Crop zone {}", zone_index + 1));
+        #[cfg(feature = "debug")]
+        debug_images.push(cropped.clone());
+        let _t0 = std::time::Instant::now();
+        let candidates = get_boss_name(cropped.clone()).await?;
+        lap!(_t0, format!("Get Boss Name for boss {}", zone_index + 1));
+        // Vérifier le meilleur candidat
+        let Some((best_text, best_score)) = candidates.first() else {
+            println!("⚠️ Zone {} : Aucun candidat trouvé", zone_index + 1);
+            break; // Si pas de résultat, arrêter la recherche
+        };
 
-    // Boss principal
-    let boss_zone_1 = dyn_image.crop_imm(crop_x, crop_y, crop_width, crop_height);
+        println!(
+            "✅ Zone {} - Meilleur résultat (score {:.2}): {}",
+            zone_index + 1,
+            best_score,
+            best_text
+        );
 
+        // Vérifier le score minimum
+        if *best_score <= 5.0 {
+            println!(
+                "⚠️ Zone {} : Score trop faible, arrêt de la recherche",
+                zone_index + 1
+            );
+            break; // Score insuffisant, arrêter
+        }
+
+        // Ajouter le boss trouvé
+        bosses.push(best_text.clone());
+
+        lap!(_t1, format!("Temps traitement zone {}", zone_index + 1));
+        #[cfg(feature = "timing")]
+        {
+            let _ = cropped
+                .save(format!("boss_zone_{}.png", zone_index + 1))
+                .ok();
+        }
+    }
+
+    // Debug: sauvegarder toutes les images
+    #[cfg(feature = "debug")]
+    {
+        println!("Saving all images");
+        if full_screen.width() > 0 && full_screen.height() > 0 {
+            full_screen.save("all_image.png").ok();
+        } else {
+            eprintln!("⚠️ full_screen est vide");
+        }
+
+        for (i, img) in debug_images.iter().enumerate() {
+            if img.width() > 0 && img.height() > 0 {
+                println!("Saving boss_zone_{}.png", i + 1);
+                img.save(format!("boss_zone_{}.png", i + 1)).ok();
+            } else {
+                eprintln!("⚠️ boss_zone_{} est vide", i + 1);
+            }
+        }
+    }
+    lap!(_t, "Temps Total pour les noms des boss  :  ");
+    Ok(bosses)
+}
+
+pub async fn get_boss_name(
+    dyn_image: DynamicImage,
+) -> Result<Vec<(std::string::String, f64)>, String> {
     // Tester plusieurs prétraitements
-    let versions = vec![
-        process_boss_gamma(&boss_zone_1, 0.20),
-        process_boss_gamma(&boss_zone_1, 0.25),
-        process_boss_gamma(&boss_zone_1, 0.30),
-        process_boss_gamma(&boss_zone_1, 0.35),
-        process_boss_gamma(&boss_zone_1, 0.40),
-        process_boss_gamma_contrast(&boss_zone_1, 0.30, 1.3),
-        process_boss_gamma_contrast(&boss_zone_1, 0.30, 1.5),
+    let _t0 = std::time::Instant::now();
+
+    let params = vec![
+        (0.20, false, 0.0),
+        (0.25, false, 0.0),
+        (0.30, false, 0.0),
+        (0.35, false, 0.0),
+        (0.40, false, 0.0),
+        (0.30, true, 1.3),
+        (0.30, true, 1.5),
     ];
 
-    let mut candidates: Vec<(String, f64)> = Vec::new();
+    // Traitement parallèle
+    let versions: Vec<_> = params
+        .par_iter() // rayon parallel iterator
+        .map(|(gamma, contrast, c)| {
+            if *contrast {
+                process_boss_gamma_contrast(&dyn_image, *gamma, *c)
+            } else {
+                process_boss_gamma(&dyn_image, *gamma)
+            }
+        })
+        .collect();
 
+    lap!(_t0, "Fin process 1 boss");
+    let _t1 = std::time::Instant::now();
+    let mut candidates: Vec<(String, f64)> = Vec::new();
+    let engine =
+        OcrEngine::new(OcrProvider::Auto).map_err(|e| format!("Erreur OCR Engine: {}", e))?;
     for (idx, version) in versions.iter().enumerate() {
         if let Ok((text, _, _)) = engine.recognize_image(&version).await {
             let cleaned = clean_ocr_text_universal(&text);
@@ -320,8 +252,19 @@ pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, Stri
                 println!("Version {}: '{}' (score: {:.2})", idx, cleaned, score);
             }
         }
-    }
+        #[cfg(feature = "debug")]
+        {
+            use std::time::{SystemTime, UNIX_EPOCH};
 
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(); // millisecondes depuis 1970
+            let filename = format!("boss_version_{}_{}.png", idx, ts);
+            version.save(&filename).unwrap();
+        }
+    }
+    lap!(_t1, "Fin calcule ocr + score 1 bosse");
     let mut freq = HashMap::new();
     for (text, _) in &candidates {
         *freq.entry(text.clone()).or_insert(0usize) += 1;
@@ -334,64 +277,7 @@ pub async fn get_boss_names(dyn_image: DynamicImage) -> Result<Vec<String>, Stri
     }
     // Trier par score décroissant
     candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-    if let Some((best_text, best_score)) = candidates.first() {
-        println!(
-            "✅ Meilleur résultat (score {:.2}): {}",
-            best_score, best_text
-        );
-
-        if *best_score > 5.0 {
-            bosses.push(best_text.clone());
-
-            // Boss secondaire
-            let crop_y_2 = crop_y.saturating_sub((h * 5) / 100);
-            let boss_zone_2 = dyn_image.crop_imm(crop_x, crop_y_2, crop_width, crop_height);
-
-            let versions2 = vec![
-                process_boss_gamma(&boss_zone_2, 0.20),
-                process_boss_gamma(&boss_zone_2, 0.25),
-                process_boss_gamma(&boss_zone_2, 0.30),
-                process_boss_gamma(&boss_zone_2, 0.35),
-            ];
-
-            let mut best_text2 = String::new();
-            let mut best_score2 = 0.0;
-
-            for version in versions2.clone() {
-                if let Ok((text2, _, _)) = engine.recognize_image(&version).await {
-                    let cleaned2 = clean_ocr_text_universal(&text2);
-                    let score2 = calculate_universal_text_quality(&cleaned2, &text2);
-                    if score2 > best_score2 {
-                        best_score2 = score2;
-                        best_text2 = cleaned2;
-                    }
-                }
-            }
-
-            if !best_text2.is_empty() && best_score2 > 5.0 {
-                bosses.push(best_text2);
-            }
-            #[cfg(feature = "debug")]
-            {
-                dyn_image.save("all_image.png").unwrap();
-                boss_zone_1.save("boss_zone_1.png").unwrap();
-                boss_zone_2.save("boss_zone_2.png").unwrap();
-                let mut i = 0;
-                for version in versions {
-                    version.save(format!("version_{}.png", i)).unwrap();
-                    i += 1;
-                }
-                let mut i = 0;
-                for version in versions2 {
-                    version.save(format!("version_2_{}.png", i)).unwrap();
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    Ok(bosses)
+    Ok(candidates.clone())
 }
 
 // Nettoyage universel pour toutes les langues
@@ -539,39 +425,6 @@ fn has_repetitive_patterns(text: &str) -> bool {
     false
 }
 
-fn process_boss_gamma(dyn_image: &DynamicImage, gamma: f32) -> DynamicImage {
-    let gray = dyn_image.to_luma8();
-    let mut enhanced = gray.clone();
-
-    for pixel in enhanced.pixels_mut() {
-        let val = pixel[0] as f32 / 255.0;
-        let corrected = (val.powf(gamma) * 255.0).clamp(0.0, 255.0);
-        pixel[0] = corrected as u8;
-    }
-
-    let (w, h) = enhanced.dimensions();
-    DynamicImage::ImageLuma8(enhanced).resize(w * 4, h * 4, image::imageops::FilterType::Lanczos3)
-}
-
-fn process_boss_gamma_contrast(
-    dyn_image: &DynamicImage,
-    gamma: f32,
-    contrast: f32,
-) -> DynamicImage {
-    let gray = dyn_image.to_luma8();
-    let mut enhanced = gray.clone();
-
-    for pixel in enhanced.pixels_mut() {
-        let val = pixel[0] as f32 / 255.0;
-        let gamma_corrected = val.powf(gamma);
-        let contrasted = ((gamma_corrected - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
-        pixel[0] = (contrasted * 255.0) as u8;
-    }
-
-    let (w, h) = enhanced.dimensions();
-    DynamicImage::ImageLuma8(enhanced).resize(w * 4, h * 4, image::imageops::FilterType::Lanczos3)
-}
-
 fn has_suspicious_final_duplication(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
@@ -596,11 +449,28 @@ fn has_consecutive_duplicates(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::structs::settings::game::Game;
+    use crate::structs::settings::settings::Settings;
 
     #[tokio::test]
-    async fn test_boss_detection() {
+    async fn test_boss_detection_eldenring() {
         let img = image::open("all_image.png").unwrap();
-        let bosses = get_boss_names(img).await.unwrap();
+        let mut settings = Settings::default();
+        settings.set_game(Game::EldenRing);
+        println!("Zone : {:?}", settings.get_game_config().get_boss_zones());
+
+        let boss_zones = settings.get_game_config().get_boss_zones().clone();
+        let bosses = get_boss_names(img, boss_zones).await.unwrap();
+
+        println!("Bosses détectés : {:?}", bosses);
+        assert!(!bosses.is_empty(), "Aucun boss détecté !");
+    }
+    #[tokio::test]
+    async fn test_boss_detection_eldenring_with_boss_zones() {
+        let img = image::open("boss_zone_1.png").unwrap();
+        let mut settings = Settings::default();
+        settings.set_game(Game::EldenRing);
+        let bosses = get_boss_name(img).await.unwrap();
 
         println!("Bosses détectés : {:?}", bosses);
         assert!(!bosses.is_empty(), "Aucun boss détecté !");

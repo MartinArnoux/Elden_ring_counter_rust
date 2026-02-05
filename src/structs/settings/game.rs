@@ -36,16 +36,10 @@ impl GameConfig {
         Self {
             death_zone: CropPosition::new(31, 46, 39, 10),
             boss_zones: vec![
-                CropPosition::new(25, 30, 50, 15), // Zone principale du boss
-                                                   // Ajoutez d'autres zones si nécessaire
+                CropPosition::new(24, 77, 53, 5),
+                CropPosition::new(24, 72, 53, 5),
+                CropPosition::new(24, 67, 53, 5),
             ],
-        }
-    }
-
-    pub fn dark_souls_3_default() -> Self {
-        Self {
-            death_zone: CropPosition::new(30, 45, 40, 12),
-            boss_zones: vec![CropPosition::new(20, 25, 60, 20)],
         }
     }
 

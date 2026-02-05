@@ -1,3 +1,13 @@
+#[macro_export]
+macro_rules! lap {
+    ($start:expr, $label:expr) => {{
+        #[cfg(feature = "timing")]
+        {
+            let elapsed = $start.elapsed();
+            println!("{:<30} {:>6} ms", $label, elapsed.as_millis());
+        }
+    }};
+}
 use iced;
 use iced::{Size, window};
 mod hotkey;
