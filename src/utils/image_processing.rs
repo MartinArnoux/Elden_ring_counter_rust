@@ -12,6 +12,7 @@ pub fn adjust_gamma(img: &GrayImage, gamma: f32) -> GrayImage {
     }
     result
 }
+
 pub fn increase_contrast(img: &GrayImage, factor: f32) -> GrayImage {
     let mut result = img.clone();
     for pixel in result.pixels_mut() {
@@ -21,6 +22,7 @@ pub fn increase_contrast(img: &GrayImage, factor: f32) -> GrayImage {
     }
     result
 }
+
 // Fonction pour détecter la présence de "texte" rouge dans une image
 pub fn has_red_text_present(image: &DynamicImage) -> bool {
     let rgba = image.to_rgba8();

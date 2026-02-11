@@ -9,6 +9,7 @@ use crate::utils::screen_capture::crop_image_crop_position;
 use image::DynamicImage;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use strsim::jaro_winkler;
 use uni_ocr::{OcrEngine, OcrProvider};
 
 // ============================================================================
@@ -18,6 +19,7 @@ use uni_ocr::{OcrEngine, OcrProvider};
 pub async fn detect_death(
     full_screen: &DynamicImage,
     death_zone_config: &CropPosition,
+    death_text: String,
 ) -> Result<bool, String> {
     let _t0 = std::time::Instant::now();
 
@@ -63,14 +65,14 @@ pub async fn detect_death(
     // ───────────────── Preprocess + OCR V1
     let red = extract_red_channel(&death_zone);
     let v1 = preprocess_v1_fast(&red);
-    let (ok_v1, score_v1) = ocr_check(&engine, &v1, "OCR version 1").await;
+    let (ok_v1, score_v1) = ocr_check(&engine, &v1, death_text.clone(), "OCR version 1").await;
     if ok_v1 {
         lap!(_t0, "TOTAL detect_death");
         return Ok(true);
     }
 
     let v2 = preprocess_v2_fallback(&red);
-    let (ok_v2, score_v2) = ocr_check(&engine, &v2, "OCR version 2").await;
+    let (ok_v2, score_v2) = ocr_check(&engine, &v2, death_text.clone(), "OCR version 2").await;
     if ok_v2 {
         lap!(_t0, "TOTAL detect_death");
         return Ok(true);
@@ -83,6 +85,16 @@ pub async fn detect_death(
             println!("OCR V1 score: {}", score_v1);
             println!("OCR V2 score: {}", score_v2);
         }
+        #[cfg(feature = "timing")]
+        {
+            v1.save("death_v1.png");
+            v2.save("death_v2.png");
+        }
+
+        lap!(
+            _t0,
+            format!("Death detected : score 1 {} ; score {}", score_v1, score_v2)
+        );
         return Ok(true);
     }
 
@@ -96,17 +108,22 @@ pub async fn detect_death(
     Ok(false)
 }
 
-async fn ocr_check(engine: &OcrEngine, image: &DynamicImage, _label: &str) -> (bool, f64) {
+async fn ocr_check(
+    engine: &OcrEngine,
+    image: &DynamicImage,
+    death_text: String,
+    _label: &str,
+) -> (bool, f64) {
     let _t = std::time::Instant::now();
 
     let detected = match engine.recognize_image(image).await {
-        Ok((text, _, _)) => is_death_text(&text),
+        Ok((text, _, _)) => is_death_text(&text, death_text),
         Err(_) => (false, 0.0),
     };
     lap!(_t, _label);
     detected
 }
-fn is_death_text(text: &str) -> (bool, f64) {
+fn is_death_text(text: &str, death_text: String) -> (bool, f64) {
     let upper = text.to_uppercase();
     let normalized = upper
         .replace("Ü", "U")
@@ -114,13 +131,19 @@ fn is_death_text(text: &str) -> (bool, f64) {
         .replace("É", "E")
         .replace(" ", "");
     let cleaned2 = clean_ocr_text_universal(&normalized);
+    let death_text_str = death_text.as_str();
+    let death_texte_no_space = death_text_str.replace(" ", "");
+    #[cfg(feature = "timing")]
+    {
+        println!("Death texte : {}", death_text_str);
+        println!("Normalized text: {}", normalized);
+        println!("Cleaned text: {}", cleaned2);
+    }
+    let similarity = jaro_winkler(&cleaned2, death_text_str);
 
-    (
-        upper.contains("YOU DIED")
-            || upper.contains("VOUS AVEZ PERI")
-            || normalized.contains("VOUSAVEZPERI"),
-        calculate_universal_text_quality(&cleaned2, &normalized),
-    )
+    let is_death =
+        upper.contains(death_text_str) || cleaned2.contains(death_texte_no_space.as_str());
+    (is_death, similarity)
 }
 
 // ============================================================================
@@ -282,7 +305,8 @@ pub async fn get_boss_name(
 
 // Nettoyage universel pour toutes les langues
 fn clean_ocr_text_universal(text: &str) -> String {
-    text.trim()
+    let cleaned = text
+        .trim()
         .chars()
         .filter(|c| {
             // Garder :
@@ -290,20 +314,13 @@ fn clean_ocr_text_universal(text: &str) -> String {
             // - Espaces
             // - Apostrophes, tirets
             // - Caractères de ponctuation commune dans les noms
-            c.is_alphabetic()
-                || c.is_whitespace()
-                || *c == '\''
-                || *c == '-'
-                || *c == ','
-                || *c == ':'
-                || *c == '.'
-                || *c == '('
-                || *c == ')'
+            c.is_alphabetic() || c.is_whitespace() || *c == '\'' || *c == '-' || *c == ','
         })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    cleaned
 }
 
 // Score de qualité universel (pas de langue spécifique)

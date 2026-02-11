@@ -9,6 +9,7 @@ pub struct Settings {
     game: Game,
     screen: i8,
     language: Language,
+    death_text: String,
 
     /// Configurations personnalisées par jeu
     #[serde(default)]
@@ -60,6 +61,12 @@ impl Settings {
     pub fn set_language(&mut self, language: Language) {
         self.language = language;
     }
+    pub fn set_death_text(&mut self, death_text: String) {
+        self.death_text = death_text;
+    }
+    pub fn get_death_text(&self) -> &String {
+        &self.death_text
+    }
 }
 
 impl Default for Settings {
@@ -69,6 +76,7 @@ impl Default for Settings {
             screen: 0,
             language: Language::French,
             custom_game_configs: HashMap::new(),
+            death_text: String::from("Vous avez péri"),
         }
     }
 }
