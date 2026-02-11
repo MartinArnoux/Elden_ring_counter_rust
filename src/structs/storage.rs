@@ -1,77 +1,186 @@
+use crate::structs::recorder::RecorderType;
+
 use super::recorder::Recorder;
 use super::settings::settings::Settings;
 use directories::ProjectDirs;
-use std::fs;
+use rusqlite::{Connection, Result as SqlResult};
 use std::path::PathBuf;
 
 pub struct Storage;
 
 impl Storage {
-    // Fonction pour obtenir le répertoire de l'application
-    fn get_app_dir() -> Result<PathBuf, String> {
-        ProjectDirs::from("", "", "DeathCompteur")
-            .map(|proj_dirs| proj_dirs.data_dir().to_path_buf())
-            .ok_or_else(|| "Impossible de déterminer le répertoire de données".to_string())
+    // Obtenir le chemin de la base de données
+    fn get_db_path() -> Result<PathBuf, String> {
+        let proj_dirs = ProjectDirs::from("", "", "DeathCompteur")
+            .ok_or_else(|| "Impossible de déterminer le répertoire de données".to_string())?;
+
+        let data_dir = proj_dirs.data_dir();
+        std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
+
+        Ok(data_dir.join("deathcompteur.db"))
     }
 
-    // Créer le répertoire s'il n'existe pas
-    fn ensure_app_dir() -> Result<PathBuf, String> {
-        let app_dir = Self::get_app_dir()?;
-        fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
-        Ok(app_dir)
+    // Ouvrir la connexion et initialiser les tables
+    fn open() -> Result<Connection, String> {
+        let path = Self::get_db_path()?;
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        Self::init_tables(&conn)?;
+        Ok(conn)
     }
 
-    // Chemins des fichiers
-    fn recorders_path() -> Result<PathBuf, String> {
-        let mut path = Self::ensure_app_dir()?;
-        path.push("recorders.json");
-        Ok(path)
+    // Créer les tables si elles n'existent pas
+    fn init_tables(conn: &Connection) -> Result<(), String> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS recorders (
+                uuid            TEXT PRIMARY KEY,
+                title           TEXT NOT NULL,
+                counter         INTEGER NOT NULL DEFAULT 0,
+                is_active       INTEGER NOT NULL DEFAULT 0,
+                position        INTEGER NOT NULL DEFAULT 0,
+                recorder_type   TEXT NOT NULL DEFAULT 'Classic'
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key     TEXT PRIMARY KEY,
+                value   TEXT NOT NULL
+            );
+        ",
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Migrations : ajoutées au fur et à mesure des évolutions du schéma
+        // let _ = conn.execute_batch(
+        //     "ALTER TABLE recorders ADD COLUMN recorder_type TEXT NOT NULL DEFAULT 'Classic';"
+        // );
+
+        Ok(())
     }
 
-    fn settings_path() -> Result<PathBuf, String> {
-        let mut path = Self::ensure_app_dir()?;
-        path.push("settings.json");
-        Ok(path)
-    }
+    // -------------------------
+    // Recorders
+    // -------------------------
 
     pub fn save_recorders(recorders: &Vec<Recorder>) -> Result<(), String> {
-        let path = Self::recorders_path()?;
-        println!("path recorder : {:?}", path);
-        let json = serde_json::to_string_pretty(recorders).map_err(|e| e.to_string())?;
-        fs::write(path, json).map_err(|e| e.to_string())?;
+        let conn = Self::open()?;
+
+        conn.execute("DELETE FROM recorders", [])
+            .map_err(|e| e.to_string())?;
+
+        for (i, recorder) in recorders.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO recorders (uuid, title, counter, is_active, position, recorder_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    recorder.get_uuid().to_string(),
+                    recorder.get_title(),
+                    recorder.get_counter(),
+                    recorder.get_status_recorder() as i32,
+                    i as i32,
+                    recorder.get_type().to_db_str()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
     pub fn load_recorders() -> Result<Vec<Recorder>, String> {
-        let path = Self::recorders_path()?;
+        let conn = Self::open()?;
 
-        if !path.exists() {
-            println!("Aucun fichier de sauvegarde trouvé");
-            return Ok(Vec::new());
-        }
+        let mut stmt = conn
+            .prepare("SELECT uuid, title, counter, is_active, recorder_type FROM recorders ORDER BY position ASC")
+            .map_err(|e| e.to_string())?;
 
-        let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let recorders = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        let recorders = stmt
+            .query_map([], |row| {
+                let uuid_str: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let counter: u32 = row.get(2)?;
+                let is_active: i32 = row.get(3)?;
+                let recorder_type: String = row.get(4)?;
+                Ok((uuid_str, title, counter, is_active, recorder_type))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .map(|(uuid_str, title, counter, is_active, recorder_type)| {
+                Recorder::from_db(
+                    uuid_str,
+                    title,
+                    counter,
+                    is_active != 0,
+                    RecorderType::from_db_str(&recorder_type),
+                )
+            })
+            .collect();
+
         Ok(recorders)
     }
 
+    pub fn save_recorder(recorder: &Recorder, position: usize) -> Result<(), String> {
+        let conn = Self::open()?;
+
+        conn.execute(
+            "INSERT INTO recorders (uuid, title, counter, is_active, position, recorder_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(uuid) DO UPDATE SET
+                title = excluded.title,
+                counter = excluded.counter,
+                is_active = excluded.is_active,
+                position = excluded.position,
+                recorder_type = excluded.recorder_type",
+            rusqlite::params![
+                recorder.get_uuid().to_string(),
+                recorder.get_title(),
+                recorder.get_counter(),
+                recorder.get_status_recorder() as i32,
+                position as i32,
+                recorder.get_type().clone().to_db_str()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn delete_recorder(uuid: &str) -> Result<(), String> {
+        let conn = Self::open()?;
+        conn.execute("DELETE FROM recorders WHERE uuid = ?1", [uuid])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // -------------------------
+    // Settings
+    // -------------------------
+
     pub fn save_settings(settings: &Settings) -> Result<(), String> {
-        let path = Self::settings_path()?;
-        let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-        fs::write(path, json).map_err(|e| e.to_string())?;
+        let conn = Self::open()?;
+        let json = serde_json::to_string(settings).map_err(|e| e.to_string())?;
+
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('settings', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [json],
+        )
+        .map_err(|e| e.to_string())?;
+
         Ok(())
     }
 
     pub fn load_settings() -> Result<Settings, String> {
-        let path = Self::settings_path()?;
+        let conn = Self::open()?;
 
-        if !path.exists() {
-            println!("Aucun fichier de paramètres trouvé, utilisation des valeurs par défaut");
-            return Ok(Settings::default());
+        let result: SqlResult<String> = conn.query_row(
+            "SELECT value FROM settings WHERE key = 'settings'",
+            [],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(json) => serde_json::from_str(&json).map_err(|e| e.to_string()),
+            Err(_) => Ok(Settings::default()),
         }
-
-        let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let settings = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-        Ok(settings)
     }
 }
