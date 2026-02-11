@@ -7,9 +7,11 @@ use crate::i18n::{
     language::{ALL_LANGUAGES, Language},
     translations::I18n,
 };
+use crate::screens::add_recorder_screen::{AddRecorderMessage, AddRecorderScreen};
 use crate::screens::main_screen::{MainScreen, MainScreenMessage};
 use crate::utils::app_worker::{hotkey_subscription, ocr_subscription};
 use iced::Color;
+use iced::task::Task;
 use iced::widget::{Column, PickList};
 use iced::widget::{Container, Row, pick_list};
 use iced::{
@@ -38,9 +40,8 @@ pub enum StatusOCR {
 #[derive(Clone, Debug)]
 pub enum MessageApp {
     MainScreen(MainScreenMessage),
+    AddRecorderScreen(AddRecorderMessage),
     ChangeView(Screen),
-    AddCounter,
-    CancelAddCounter,
     AutosaveTick,
     ActivateOCR(bool),
     StartingOCR,
@@ -50,14 +51,13 @@ pub enum MessageApp {
     GameSelected(Game),
     LanguageSelected(Language),
     ScreenSelected(ScreenInfo),
-    TitleChanged(String),
     DeathText(String),
 }
 
 #[derive(Clone, Debug)]
 pub enum Screen {
     MainScreen(MainScreen),
-    AddRecorder,
+    AddRecorderScreen(AddRecorderScreen),
     Settings,
 }
 
@@ -71,9 +71,7 @@ impl Default for Screen {
 pub struct App {
     settings: Settings,
     i18n: I18n,
-
     screen: Screen,
-    new_recorder_title: String,
     dirty: bool,
     ocr_activate: bool,
     ocr_status: StatusOCR,
@@ -94,13 +92,11 @@ impl App {
                 Storage::load_recorders().unwrap_or_default()
             }
         };
-        Self::ensure_global_counters(&mut recorders);
         let settings = Storage::load_settings().unwrap_or_default();
         let i18n = I18n::new(settings.get_language().clone());
         let screens_list = get_screens_vec().unwrap_or_default();
         App {
             screen: Screen::MainScreen(MainScreen::new()),
-            new_recorder_title: "".to_string(),
             dirty: false,
             ocr_activate: false,
             ocr_status: StatusOCR::Stopped,
@@ -111,74 +107,60 @@ impl App {
     }
 
     fn go_to(&mut self, screen: Screen) -> () {
+        match &self.screen {
+            Screen::MainScreen(main_screen) => {
+                main_screen.save();
+            }
+            _ => {}
+        }
         match screen {
             Screen::MainScreen(main_screen) => self.screen = Screen::MainScreen(main_screen),
             _ => self.screen = screen,
         }
     }
-    fn ensure_global_counters(recorders: &mut Vec<Recorder>) {
-        let has_global_deaths = recorders.iter().any(|r| r.is_global_deaths());
-        let has_global_bosses = recorders.iter().any(|r| r.is_global_bosses());
 
-        // Retirer les globaux de leur position actuelle
-        //recorders.retain(|r| !r.is_global());
-
-        // Les réinsérer dans l'ordre en haut
-        if !has_global_bosses {
-            recorders.insert(0, Recorder::new_global_bosses());
-        }
-
-        if !has_global_deaths {
-            recorders.insert(0, Recorder::new_global_deaths());
-        }
-    }
-
-    pub fn update(&mut self, message: MessageApp) {
+    pub fn update(&mut self, message: MessageApp) -> Task<MessageApp> {
         match message {
-            MessageApp::MainScreen(list_message) => match list_message {
+            MessageApp::MainScreen(main_screen_message) => match main_screen_message {
+                MainScreenMessage::ChangeView(view) => {
+                    self.go_to(view);
+                    Task::none()
+                }
                 _ => match &mut self.screen {
-                    Screen::MainScreen(main_screen) => {
-                        main_screen.update(list_message);
-                    }
-                    _ => {}
+                    Screen::MainScreen(main_screen) => main_screen
+                        .update(main_screen_message)
+                        .map(MessageApp::MainScreen),
+                    _ => Task::none(),
                 },
             },
-            MessageApp::TitleChanged(value) => {
-                self.new_recorder_title = value;
-            }
-            MessageApp::AddCounter => {
-                let title = self.new_recorder_title.trim();
 
-                if !title.is_empty() {
-                    self.add_recorder(title.to_string());
-                    self.dirty();
-                    self.go_to(Screen::MainScreen(MainScreen::new()));
+            MessageApp::AddRecorderScreen(add_recorder_screen_message) => {
+                match add_recorder_screen_message {
+                    AddRecorderMessage::ChangeView(view) => {
+                        self.go_to(view);
+                        Task::none()
+                    }
+                    _ => match &mut self.screen {
+                        Screen::AddRecorderScreen(add_recorder_screen) => add_recorder_screen
+                            .update(add_recorder_screen_message)
+                            .map(MessageApp::AddRecorderScreen),
+                        _ => Task::none(),
+                    },
                 }
             }
-            MessageApp::CancelAddCounter => {
-                self.go_to(Screen::MainScreen(MainScreen::new()));
-            }
 
-            MessageApp::ChangeView(screen) => self.screen = screen,
+            MessageApp::ChangeView(screen) => {
+                self.screen = screen;
+                Task::none()
+            }
 
             MessageApp::AutosaveTick => {
-                if self.dirty {
-                    #[cfg(feature = "no_save")]
-                    {
-                        println!("🐛 Mode DEBUG - sauvegarde ignorée");
-                    }
-
-                    #[cfg(not(feature = "no_save"))]
-                    {
-                        println!("💾 Autosave!");
-                        //let _ = Storage::save_recorders(&self.recorders);
-                    }
-
-                    self.dirty = false;
-                }
+                self.save();
+                Task::none()
             }
             MessageApp::DeathText(text) => {
                 self.settings.set_death_text(text);
+                Task::none()
             }
 
             MessageApp::ActivateOCR(b) => {
@@ -187,36 +169,44 @@ impl App {
                     self.ocr_status = StatusOCR::Stopped;
                     println!("🤖 OCR stopped !");
                 }
+                Task::none()
             }
 
             MessageApp::StartingOCR => {
                 self.ocr_status = StatusOCR::Starting;
                 println!("🤖 OCR starting !");
+                Task::none()
             }
             MessageApp::OCROK => {
                 self.ocr_status = StatusOCR::Started(ActionOCR::SearchingDeath);
                 println!("🤖 OCR started !");
+                Task::none()
             }
 
             MessageApp::ChangeActionOCR(status) => {
                 println!("🤖 OCR status changed to {:?}", status);
                 self.ocr_status = StatusOCR::Started(status);
+                Task::none()
             }
 
             MessageApp::SaveSettings => {
                 let _ = Storage::save_settings(&self.settings);
                 self.screen = Screen::MainScreen(MainScreen::new());
+                Task::none()
             }
             MessageApp::GameSelected(game) => {
                 self.settings.set_game(game);
+                Task::none()
             }
             MessageApp::LanguageSelected(language) => {
                 self.set_language(language);
+                Task::none()
             }
             MessageApp::ScreenSelected(screen) => {
                 self.settings.set_screen(screen.index);
+                Task::none()
             }
-        };
+        }
     }
 
     pub fn set_language(&mut self, language: Language) {
@@ -227,7 +217,9 @@ impl App {
     pub fn view(&self) -> Element<'_, MessageApp> {
         let main = match &self.screen {
             Screen::MainScreen(main_screen) => main_screen.view().map(MessageApp::MainScreen),
-            Screen::AddRecorder => self.view_add_recorder(),
+            Screen::AddRecorderScreen(add_recorder_screen) => add_recorder_screen
+                .view()
+                .map(MessageApp::AddRecorderScreen),
             Screen::Settings => self.view_settings(),
         };
         main
@@ -252,10 +244,6 @@ impl App {
         Subscription::batch(vec![autosave, hotkey_sub, ocr_sub])
     }
 
-    pub fn reset_new_recorder_title(&mut self) -> () {
-        self.new_recorder_title = "".to_string()
-    }
-
     fn dirty(&mut self) -> () {
         self.dirty = true;
     }
@@ -265,28 +253,6 @@ impl App {
         //     return;
         // }
         //self.recorders.push(Recorder::new(title));
-    }
-
-    pub fn view_add_recorder(&self) -> Element<'_, MessageApp> {
-        let content = column![
-            text("Ajouter un enregistreur".to_string())
-                .size(30)
-                .width(Length::Fill)
-        ]
-        .spacing(10)
-        .padding(20)
-        .height(Length::Fill)
-        .width(Length::Fill);
-
-        let input = text_input("title", &self.new_recorder_title)
-            .on_input(MessageApp::TitleChanged)
-            .on_submit_maybe(Some(MessageApp::AddCounter));
-        let button_row = row![
-            button("Ajouter").on_press(MessageApp::AddCounter),
-            button("Annuler").on_press(MessageApp::CancelAddCounter)
-        ];
-
-        content.push(input).push(button_row).into()
     }
 
     pub fn view_settings(&self) -> Element<'_, MessageApp> {
@@ -348,6 +314,13 @@ impl App {
             .push(button_save);
 
         content.into()
+    }
+
+    fn save(&self) {
+        match &self.screen {
+            Screen::MainScreen(main_screen) => main_screen.save(),
+            _ => {}
+        }
     }
 }
 
@@ -412,8 +385,6 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        if self.dirty {
-            //let _ = Storage::save_recorders(&self.recorders);
-        }
+        self.save();
     }
 }

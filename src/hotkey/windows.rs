@@ -1,4 +1,5 @@
 use crate::hotkey::{GlobalHotkey, HotkeyError, Key, Modifier};
+use crate::screens::components::list::ListMessage;
 use crate::screens::main_screen::MainScreenMessage;
 use crate::structs::app::MessageApp;
 use tokio::sync::mpsc::UnboundedSender;
@@ -64,9 +65,11 @@ impl GlobalHotkey for WindowsHotkey {
                     // Envoie le message via le channel tokio
                     // let _ = output
 
-                    if let Err(e) = self
-                        .sender
-                        .send(MessageApp::MainScreen(MainScreenMessage::Increment))
+                    if let Err(e) =
+                        self.sender
+                            .send(MessageApp::MainScreen(MainScreenMessage::List(
+                                ListMessage::Increment,
+                            )))
                     {
                         eprintln!("Failed to send hotkey message: {:?}", e);
                         break;

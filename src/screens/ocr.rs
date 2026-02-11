@@ -1,50 +1,32 @@
-use crate::screens::add_recorder_screen::AddRecorderScreen;
-use crate::screens::components::list::{ListComponent, ListMessage};
-use crate::structs::app::{MessageApp, Screen};
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler};
-use iced::{Color, Element, Length, Task};
+use iced::{Color, Element, Length};
 use strsim::normalized_levenshtein;
 use uuid::Uuid;
 // -------------------------------------------------------
 // Messages propres à la vue List
 // -------------------------------------------------------
 #[derive(Debug, Clone)]
-pub enum MainScreenComponents {
-    List(ListComponent),
-}
-
-#[derive(Debug, Clone)]
-pub enum MainScreenMessage {
-    List(ListMessage),
+pub enum OcrMessage {
     BossesFoundOCR(Vec<String>),
     DeathDetected,
-    ChangeView(Screen),
 }
 
 // -------------------------------------------------------
 // État propre à la vue List
 // -------------------------------------------------------
 #[derive(Clone, Debug, Default)]
-pub struct MainScreen {
-    list: ListComponent,
-}
+pub struct OcrScreen {}
 
-impl MainScreen {
+impl OcrScreen {
     pub fn new() -> Self {
-        Self {
-            list: ListComponent::new(),
-        }
+        Self {}
     }
 
-    pub fn update(&mut self, message: MainScreenMessage) -> Task<MainScreenMessage> {
+    pub fn update(&mut self, message: OcrMessage) {
         match message {
-            MainScreenMessage::ChangeView(view) => Task::none(),
-            MainScreenMessage::List(message) => {
-                self.list.update(message).map(MainScreenMessage::List)
-            }
-            MainScreenMessage::BossesFoundOCR(bosses) => {
+            OcrMessage::BossesFoundOCR(bosses) => {
                 let bosses_names: String = bosses
                     .into_iter()
                     .filter(|b| !b.trim().is_empty())
@@ -55,50 +37,31 @@ impl MainScreen {
                 if !bosses_names.is_empty() {
                     self.handle_boss_death(bosses_names);
                 }
-                Task::none()
             }
-            MainScreenMessage::DeathDetected => {
+            OcrMessage::DeathDetected => {
                 println!("💀 Mort détectée ! Recherche des boss...");
-                self.list.increment_global_deaths();
-                Task::none()
+                self.increment_global_deaths();
             }
         }
     }
 
-    pub fn view<'a>(&'a self) -> Element<'a, MainScreenMessage> {
-        column![
-            self.list.view().map(MainScreenMessage::List),
-            row![
-                button("Ajouter un compteur").on_press(MainScreenMessage::ChangeView(
-                    crate::structs::app::Screen::AddRecorderScreen(AddRecorderScreen::new())
-                ))
-            ]
-        ]
-        .into()
-    }
-
-    // --- Vue d'un compteur classique ---
-
-    pub fn save(&self) {
-        self.list.save();
-    }
+    pub fn view<'a>(&'a self) -> Element<'a, OcrMessage> {}
 
     fn handle_boss_death(&mut self, boss_name: String) {
         println!("⚔️  Mort contre : {}", boss_name);
 
-        let global_count = self.list.recorders.iter().filter(|r| r.is_global()).count();
+        let global_count = self.recorders.iter().filter(|r| r.is_global()).count();
         let normalized_boss = boss_name.trim().to_uppercase();
 
         // 1. Chercher correspondance exacte d'abord
         if let Some(pos) = self
-            .list
             .recorders
             .iter()
             .position(|r| r.is_classic() && r.get_title().to_uppercase() == normalized_boss)
         {
-            let mut recorder = self.list.recorders.remove(pos);
+            let mut recorder = self.recorders.remove(pos);
             recorder.increment();
-            self.list.recorders.insert(global_count, recorder);
+            self.recorders.insert(global_count, recorder);
             println!("✅ Compteur '{}' incrémenté (match exact)", boss_name);
         } else {
             // 2. Pas de match exact, chercher une similarité
@@ -113,9 +76,9 @@ impl MainScreen {
                         (similarity * 100.0) as u32
                     );
 
-                    let mut recorder = self.list.recorders.remove(pos);
+                    let mut recorder = self.recorders.remove(pos);
                     recorder.increment();
-                    self.list.recorders.insert(global_count, recorder);
+                    self.recorders.insert(global_count, recorder);
                     println!(
                         "✅ Compteur '{}' incrémenté (match similaire)",
                         existing_name
@@ -125,13 +88,13 @@ impl MainScreen {
                     // 3. Pas de match similaire : créer nouveau compteur
                     let mut new_recorder = Recorder::new(boss_name.clone());
                     new_recorder.force_increment();
-                    self.list.recorders.insert(global_count, new_recorder);
+                    self.recorders.insert(global_count, new_recorder);
                     println!("✅ Nouveau compteur '{}' créé", boss_name);
                 }
             }
         }
 
-        self.list.increment_global_bosses();
+        self.increment_global_bosses();
     }
 
     /// Trouve le boss le plus similaire dans la liste
@@ -139,7 +102,7 @@ impl MainScreen {
     fn find_similar_boss(&self, boss_name: &str, threshold: f64) -> Option<(usize, f64, String)> {
         let mut best_match: Option<(usize, f64, String)> = None;
 
-        for (i, recorder) in self.list.recorders.iter().enumerate() {
+        for (i, recorder) in self.recorders.iter().enumerate() {
             if !recorder.is_classic() {
                 continue; // Ignorer les globaux
             }
