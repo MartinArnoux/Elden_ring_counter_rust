@@ -6,7 +6,7 @@ use super::settings::settings::Settings;
 use super::storage::Storage;
 use crate::utils::app_worker::{hotkey_subscription, ocr_subscription};
 use iced::Color;
-use iced::widget::{Column, PickList};
+use iced::widget::{Column, PickList, TextInput};
 use iced::widget::{Container, Row, pick_list};
 use iced::{
     Element, Length, Subscription,
@@ -60,6 +60,7 @@ pub enum MessageApp {
     GameSelected(Game),
     LanguageSelected(Language),
     ScreenSelected(ScreenInfo),
+    DeathText(String),
 }
 
 #[derive(Default, Clone, Debug)]
@@ -276,7 +277,7 @@ impl App {
                 }
             }
             MessageApp::SaveSettings => {
-                Storage::save_settings(&self.settings).unwrap();
+                let _ = Storage::save_settings(&self.settings);
                 self.screen = Screen::List;
             }
             MessageApp::GameSelected(game) => {
@@ -287,6 +288,9 @@ impl App {
             }
             MessageApp::ScreenSelected(screen) => {
                 self.settings.set_screen(screen.index);
+            }
+            MessageApp::DeathText(death_text) => {
+                self.settings.set_death_text(death_text);
             }
         };
     }
@@ -307,7 +311,11 @@ impl App {
 
         // ✅ Conditionnellement créer la subscription OCR
         let ocr_sub = if self.ocr_activate {
-            ocr_subscription(self.settings.get_screen(), self.settings.get_game_config())
+            ocr_subscription(
+                self.settings.get_screen(),
+                self.settings.get_game_config(),
+                self.settings.get_death_text().clone(),
+            )
         } else {
             Subscription::none()
         };
@@ -736,12 +744,15 @@ impl App {
             .push(Text::new("Écran:"))
             .push(screen_pick_list);
 
+        let death_text_input = text_input("Death texte", &self.settings.get_death_text())
+            .on_input(MessageApp::DeathText);
         let button_save = button("Enregistrer").on_press(MessageApp::SaveSettings);
 
         content = content
             .push(game_row)
             .push(language_row)
             .push(screen_row)
+            .push(death_text_input)
             .push(button_save);
 
         content.into()

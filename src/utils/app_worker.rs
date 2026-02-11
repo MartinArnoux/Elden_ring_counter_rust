@@ -16,10 +16,16 @@ pub fn hotkey_subscription() -> Subscription<MessageApp> {
     Subscription::run(hotkey_worker)
 }
 
-pub fn ocr_subscription(screen: i8, game_config: GameConfig) -> Subscription<MessageApp> {
+pub fn ocr_subscription(
+    screen: i8,
+    game_config: GameConfig,
+    death_text: String,
+) -> Subscription<MessageApp> {
     Subscription::run_with(
-        (screen, game_config.clone()),
-        move |(screen, game_config)| ocr_worker(*screen, game_config.clone()),
+        (screen, game_config.clone(), death_text),
+        move |(screen, game_config, death_text)| {
+            ocr_worker(*screen, game_config.clone(), death_text.clone())
+        },
     )
 }
 
@@ -83,6 +89,7 @@ pub fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
 pub fn ocr_worker(
     screen: i8,
     game_config: GameConfig,
+    death_text: String,
 ) -> impl iced::futures::Stream<Item = MessageApp> {
     use iced::futures::sink::SinkExt;
 
@@ -120,7 +127,7 @@ pub fn ocr_worker(
                         continue;
                     }
                 };
-                match detect_death(&full_screen, &death_zone).await {
+                match detect_death(&full_screen, &death_zone, death_text.clone()).await {
                     Ok(true) => {
                         found_death = true;
                         println!("DetectDeath! after {:?}", loop_start.elapsed());
@@ -185,7 +192,7 @@ pub fn ocr_worker(
                             //tokio::time::sleep(Duration::from_secs(8)).await;
                             #[cfg(any(feature = "debug", feature = "timing"))]
                             {
-                                let _ = output.send(MessageApp::ActivateOCR(false)).await;
+                                //let _ = output.send(MessageApp::ActivateOCR(false)).await;
                                 println!("End of Boss OCR task");
                             }
                         }
