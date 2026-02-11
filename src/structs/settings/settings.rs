@@ -1,6 +1,6 @@
 // src/structs/settings/settings.rs
 use super::game::{Game, GameConfig};
-use super::language::Language;
+use crate::i18n::language::Language;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
