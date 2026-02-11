@@ -143,6 +143,39 @@ impl Storage {
 
         Ok(())
     }
+    pub fn insert_recorder_at_first_position(recorder: &Recorder) -> Result<(), String> {
+        let mut conn = Self::open().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        // 1️⃣ Décaler toutes les positions existantes
+        tx.execute("UPDATE recorders SET position = position + 1", [])
+            .map_err(|e| e.to_string())?;
+
+        // 2️⃣ Insérer le nouveau recorder en position 0
+        tx.execute(
+            "INSERT INTO recorders (uuid, title, counter, is_active, position, recorder_type)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5)
+             ON CONFLICT(uuid) DO UPDATE SET
+                title = excluded.title,
+                counter = excluded.counter,
+                is_active = excluded.is_active,
+                position = 0,
+                recorder_type = excluded.recorder_type",
+            rusqlite::params![
+                recorder.get_uuid().to_string(),
+                recorder.get_title(),
+                recorder.get_counter(),
+                recorder.get_status_recorder() as i32,
+                recorder.get_type().clone().to_db_str()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // 3️⃣ Commit transaction
+        tx.commit().map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
 
     pub fn delete_recorder(uuid: &str) -> Result<(), String> {
         let conn = Self::open()?;

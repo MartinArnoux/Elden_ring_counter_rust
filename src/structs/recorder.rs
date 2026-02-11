@@ -61,7 +61,9 @@ impl Recorder {
         self.counter += 1;
     }
     pub fn force_decrement(&mut self) -> () {
-        self.counter -= 1;
+        if self.counter > 0 {
+            self.counter -= 1;
+        }
     }
     pub fn get_counter(&self) -> u32 {
         self.counter
