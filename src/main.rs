@@ -13,6 +13,7 @@ use iced::{Size, window};
 mod hotkey;
 mod i18n;
 mod ocr;
+mod screens;
 mod structs;
 mod style;
 mod utils;

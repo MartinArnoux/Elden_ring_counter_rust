@@ -11,7 +11,7 @@ pub enum RecorderType {
 pub struct Recorder {
     uuid: Uuid,
     title: String,
-    counter: u128,
+    counter: u32,
     active: bool,
     recorder_type: RecorderType,
 }
@@ -63,7 +63,7 @@ impl Recorder {
     pub fn force_decrement(&mut self) -> () {
         self.counter -= 1;
     }
-    pub fn get_counter(&self) -> u128 {
+    pub fn get_counter(&self) -> u32 {
         self.counter
     }
     pub fn reset(&mut self) {
@@ -85,9 +85,9 @@ impl Recorder {
         self.active
     }
 
-    // pub fn get_type(&self) -> &RecorderType {
-    //     &self.recorder_type
-    // }
+    pub fn get_type(&self) -> &RecorderType {
+        &self.recorder_type
+    }
 
     pub fn is_global(&self) -> bool {
         matches!(
@@ -107,8 +107,44 @@ impl Recorder {
     pub fn is_classic(&self) -> bool {
         self.recorder_type == RecorderType::Classic
     }
+
+    pub fn from_db(
+        uuid_string: String,
+        title: String,
+        counter: u32,
+        is_active: bool,
+        recorder_type: RecorderType,
+    ) -> Self {
+        let uuid = Uuid::parse_str(&uuid_string).unwrap();
+        Recorder {
+            uuid,
+            title,
+            counter,
+            active: is_active,
+            recorder_type: recorder_type,
+        }
+    }
 }
 
+impl RecorderType {
+    pub fn to_db_str(&self) -> &str {
+        match self {
+            RecorderType::Classic => "Classic",
+            RecorderType::GlobalDeaths => "GlobalDeaths",
+            RecorderType::GlobalBosses => "GlobalBosses",
+        }
+    }
+
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "GlobalDeaths" => RecorderType::GlobalDeaths,
+            "GlobalBosses" => RecorderType::GlobalBosses,
+            _ => RecorderType::Classic, // Valeur par défaut
+        }
+    }
+}
+
+////TEST////
 #[cfg(test)]
 mod tests {
     use super::*;

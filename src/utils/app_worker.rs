@@ -1,5 +1,6 @@
 use crate::hotkey::{GlobalHotkey, Key, Modifier, WindowsHotkey};
 use crate::ocr::ocr::{detect_death, get_boss_names};
+use crate::screens::main_screen::MainScreenMessage;
 use crate::structs::app::{ActionOCR, MessageApp};
 use crate::structs::settings::game::GameConfig;
 use crate::utils::screen_capture::capture_full_screen;
@@ -146,8 +147,9 @@ pub fn ocr_worker(
                             let _ = output
                                 .send(MessageApp::ChangeActionOCR(ActionOCR::SearchingBossName))
                                 .await;
-                            let _ = output.send(MessageApp::DeathDetected).await;
-
+                            let _ = output
+                                .send(MessageApp::MainScreen(MainScreenMessage::DeathDetected))
+                                .await;
                             // 🔑 allow UI/state reducer to run NOW
                             yield_now().await;
 
@@ -164,14 +166,19 @@ pub fn ocr_worker(
                                 match get_boss_names(dyn_image_clone, boss_zones_clone).await {
                                     Ok(bosses) => {
                                         println!("⚔️ Boss trouvés : {:?}", bosses);
+
                                         let _ = output_clone
-                                            .send(MessageApp::BossesFoundOCR(bosses))
+                                            .send(MessageApp::MainScreen(
+                                                MainScreenMessage::BossesFoundOCR(bosses),
+                                            ))
                                             .await;
                                     }
                                     Err(e) => {
                                         eprintln!("❌ Erreur détection boss : {}", e);
                                         let _ = output_clone
-                                            .send(MessageApp::BossesFoundOCR(vec![]))
+                                            .send(MessageApp::MainScreen(
+                                                MainScreenMessage::BossesFoundOCR(vec![]),
+                                            ))
                                             .await;
                                     }
                                 }
