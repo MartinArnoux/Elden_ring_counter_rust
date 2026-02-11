@@ -1,12 +1,15 @@
 use super::recorder::Recorder;
 use super::settings::game::{ALL_GAMES, Game};
-use super::settings::language::{ALL_LANGUAGES, Language};
 use super::settings::screen::{ScreenInfo, get_screens_vec};
 use super::settings::settings::Settings;
 use super::storage::Storage;
+use crate::i18n::{
+    language::{ALL_LANGUAGES, Language},
+    translations::I18n,
+};
 use crate::utils::app_worker::{hotkey_subscription, ocr_subscription};
 use iced::Color;
-use iced::widget::{Column, PickList, TextInput};
+use iced::widget::{Column, PickList};
 use iced::widget::{Container, Row, pick_list};
 use iced::{
     Element, Length, Subscription,
@@ -17,6 +20,7 @@ use iced_aw::Spinner;
 use iced_core::widget::Text;
 use strsim::normalized_levenshtein;
 use uuid::Uuid;
+
 #[derive(Clone, Debug)]
 pub enum ActionOCR {
     SearchingDeath,
@@ -74,6 +78,7 @@ pub enum Screen {
 #[derive(Clone)]
 pub struct App {
     settings: Settings,
+    i18n: I18n,
     recorders: Vec<Recorder>,
     dragging: Option<usize>,
     screen: Screen,
@@ -102,6 +107,7 @@ impl App {
         };
         Self::ensure_global_counters(&mut recorders);
         let settings = Storage::load_settings().unwrap_or_default();
+        let i18n = I18n::new(settings.get_language().clone());
         let screens = get_screens_vec().unwrap_or_default();
         App {
             recorders,
@@ -115,6 +121,7 @@ impl App {
             edit_input_recorder_title: String::new(),
             settings,
             screens,
+            i18n,
         }
     }
 
@@ -284,7 +291,7 @@ impl App {
                 self.settings.set_game(game);
             }
             MessageApp::LanguageSelected(language) => {
-                self.settings.set_language(language);
+                self.set_language(language);
             }
             MessageApp::ScreenSelected(screen) => {
                 self.settings.set_screen(screen.index);
@@ -293,6 +300,11 @@ impl App {
                 self.settings.set_death_text(death_text);
             }
         };
+    }
+
+    pub fn set_language(&mut self, language: Language) {
+        self.settings.set_language(language.clone());
+        self.i18n.set_language(language.clone());
     }
 
     pub fn view(&self) -> Element<'_, MessageApp> {

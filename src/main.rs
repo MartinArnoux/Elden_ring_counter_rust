@@ -11,6 +11,7 @@ macro_rules! lap {
 use iced;
 use iced::{Size, window};
 mod hotkey;
+mod i18n;
 mod ocr;
 mod structs;
 mod style;
