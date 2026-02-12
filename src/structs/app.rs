@@ -1,64 +1,27 @@
-use super::recorder::Recorder;
-use super::settings::game::{ALL_GAMES, Game};
-use super::settings::screen::{ScreenInfo, get_screens_vec};
 use super::settings::settings::Settings;
 use super::storage::Storage;
-use crate::i18n::{
-    language::{ALL_LANGUAGES, Language},
-    translations::I18n,
-};
+use crate::i18n::translations::I18n;
 use crate::screens::add_recorder_screen::{AddRecorderMessage, AddRecorderScreen};
 use crate::screens::main_screen::{MainScreen, MainScreenMessage};
+use crate::screens::settings_screen::{SettingsScreen, SettingsScreenMessage};
 use crate::utils::app_worker::{hotkey_subscription, ocr_subscription};
-use iced::Color;
 use iced::task::Task;
-use iced::widget::{Column, PickList};
-use iced::widget::{Container, Row, pick_list};
-use iced::{
-    Element, Length, Subscription,
-    time::Duration,
-    widget::{button, column, container, row, scrollable, text, text_input, toggler},
-};
-use iced_aw::Spinner;
-use iced_core::widget::Text;
-use strsim::normalized_levenshtein;
-use uuid::Uuid;
-#[derive(Clone, Debug)]
-pub enum ActionOCR {
-    SearchingDeath,
-    SearchingBossName,
-    EndingAction,
-}
-
-#[derive(Clone, Debug)]
-pub enum StatusOCR {
-    Starting,
-    Started(ActionOCR),
-    Stopped,
-}
+use iced::{Element, Subscription, time::Duration};
 
 #[derive(Clone, Debug)]
 pub enum MessageApp {
     MainScreen(MainScreenMessage),
     AddRecorderScreen(AddRecorderMessage),
+    SettingsScreen(SettingsScreenMessage),
     ChangeView(Screen),
     AutosaveTick,
-    ActivateOCR(bool),
-    StartingOCR,
-    OCROK,
-    ChangeActionOCR(ActionOCR),
-    SaveSettings,
-    GameSelected(Game),
-    LanguageSelected(Language),
-    ScreenSelected(ScreenInfo),
-    DeathText(String),
 }
 
 #[derive(Clone, Debug)]
 pub enum Screen {
     MainScreen(MainScreen),
     AddRecorderScreen(AddRecorderScreen),
-    Settings,
+    SettingsScreen(SettingsScreen),
 }
 
 impl Default for Screen {
@@ -73,35 +36,18 @@ pub struct App {
     i18n: I18n,
     screen: Screen,
     dirty: bool,
-    ocr_activate: bool,
-    ocr_status: StatusOCR,
-    screens_list: Vec<ScreenInfo>,
 }
 
 impl App {
     pub fn new() -> App {
-        let mut recorders = {
-            #[cfg(feature = "no_save")]
-            {
-                println!("🐛 Mode DEBUG activé - pas de chargement des données");
-                Vec::new()
-            }
-
-            #[cfg(not(feature = "no_save"))]
-            {
-                Storage::load_recorders().unwrap_or_default()
-            }
-        };
         let settings = Storage::load_settings().unwrap_or_default();
         let i18n = I18n::new(settings.get_language().clone());
-        let screens_list = get_screens_vec().unwrap_or_default();
         App {
             screen: Screen::MainScreen(MainScreen::new()),
             dirty: false,
             ocr_activate: false,
             ocr_status: StatusOCR::Stopped,
             settings,
-            screens_list,
             i18n,
         }
     }
@@ -149,6 +95,19 @@ impl App {
                 }
             }
 
+            MessageApp::SettingsScreen(settings_screen_message) => match settings_screen_message {
+                SettingsScreenMessage::ChangeView(screen) => {
+                    self.go_to(screen);
+                    Task::none()
+                }
+                _ => match &mut self.screen {
+                    Screen::SettingsScreen(settings_screen) => settings_screen
+                        .update(settings_screen_message)
+                        .map(MessageApp::SettingsScreen),
+                    _ => Task::none(),
+                },
+            },
+
             MessageApp::ChangeView(screen) => {
                 self.screen = screen;
                 Task::none()
@@ -156,10 +115,6 @@ impl App {
 
             MessageApp::AutosaveTick => {
                 self.save();
-                Task::none()
-            }
-            MessageApp::DeathText(text) => {
-                self.settings.set_death_text(text);
                 Task::none()
             }
 
@@ -188,30 +143,7 @@ impl App {
                 self.ocr_status = StatusOCR::Started(status);
                 Task::none()
             }
-
-            MessageApp::SaveSettings => {
-                let _ = Storage::save_settings(&self.settings);
-                self.screen = Screen::MainScreen(MainScreen::new());
-                Task::none()
-            }
-            MessageApp::GameSelected(game) => {
-                self.settings.set_game(game);
-                Task::none()
-            }
-            MessageApp::LanguageSelected(language) => {
-                self.set_language(language);
-                Task::none()
-            }
-            MessageApp::ScreenSelected(screen) => {
-                self.settings.set_screen(screen.index);
-                Task::none()
-            }
         }
-    }
-
-    pub fn set_language(&mut self, language: Language) {
-        self.settings.set_language(language.clone());
-        self.i18n.set_language(language.clone());
     }
 
     pub fn view(&self) -> Element<'_, MessageApp> {
@@ -220,7 +152,9 @@ impl App {
             Screen::AddRecorderScreen(add_recorder_screen) => add_recorder_screen
                 .view()
                 .map(MessageApp::AddRecorderScreen),
-            Screen::Settings => self.view_settings(),
+            Screen::SettingsScreen(settings_screen) => {
+                settings_screen.view().map(MessageApp::SettingsScreen)
+            }
         };
         main
     }
@@ -253,67 +187,6 @@ impl App {
         //     return;
         // }
         //self.recorders.push(Recorder::new(title));
-    }
-
-    pub fn view_settings(&self) -> Element<'_, MessageApp> {
-        let mut content = Column::new()
-            .spacing(10)
-            .padding(20)
-            .width(Length::Fill)
-            .push(Text::new("Paramètres").size(30));
-
-        // Valeur sélectionnée (Option<Game>)
-        let selected_game = Some(self.settings.get_game());
-
-        let game_pick_list = pick_list(ALL_GAMES, selected_game, MessageApp::GameSelected);
-
-        let game_row = Row::new()
-            .spacing(10)
-            .push(Text::new("Game:"))
-            .push(game_pick_list);
-
-        // On garde tes autres éléments
-
-        let select_language = pick_list(
-            ALL_LANGUAGES,                      // &[Language]
-            Some(self.settings.get_language()), // Option<Language>
-            MessageApp::LanguageSelected,       // fn(Language) -> Message
-        );
-
-        let language_row = Row::new()
-            .spacing(10)
-            .push(Text::new("Langue:"))
-            .push(select_language);
-
-        let selected_screen = self
-            .screens_list
-            .iter()
-            .find(|s| s.index == self.settings.get_screen())
-            .cloned();
-
-        let screen_pick_list = PickList::new(
-            self.screens_list.as_slice(), // ✅ IMPORTANT
-            selected_screen,
-            MessageApp::ScreenSelected,
-        );
-
-        let screen_row = Row::new()
-            .spacing(10)
-            .push(Text::new("Écran:"))
-            .push(screen_pick_list);
-
-        let death_text_input = text_input("Death texte", &self.settings.get_death_text())
-            .on_input(MessageApp::DeathText);
-        let button_save = button("Enregistrer").on_press(MessageApp::SaveSettings);
-
-        content = content
-            .push(game_row)
-            .push(language_row)
-            .push(screen_row)
-            .push(death_text_input)
-            .push(button_save);
-
-        content.into()
     }
 
     fn save(&self) {

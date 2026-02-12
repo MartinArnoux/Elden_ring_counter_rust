@@ -1,7 +1,9 @@
 use crate::screens::add_recorder_screen::AddRecorderScreen;
 use crate::screens::components::list::{ListComponent, ListMessage};
+use crate::screens::settings_screen::SettingsScreen;
 use crate::structs::app::{MessageApp, Screen};
 use crate::structs::recorder::Recorder;
+use crate::structs::settings::settings::Settings;
 use crate::structs::storage::Storage;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler};
 use iced::{Color, Element, Length, Task};
@@ -29,18 +31,22 @@ pub enum MainScreenMessage {
 #[derive(Clone, Debug, Default)]
 pub struct MainScreen {
     list: ListComponent,
+    ocr: OcrComponent,
+    settings: Settings,
 }
 
 impl MainScreen {
     pub fn new() -> Self {
         Self {
             list: ListComponent::new(),
+            ocr: OcrComponent::new(),
+            settings: Settings::load(),
         }
     }
 
     pub fn update(&mut self, message: MainScreenMessage) -> Task<MainScreenMessage> {
         match message {
-            MainScreenMessage::ChangeView(view) => Task::none(),
+            MainScreenMessage::ChangeView(_) => Task::none(),
             MainScreenMessage::List(message) => {
                 self.list.update(message).map(MainScreenMessage::List)
             }
@@ -71,8 +77,13 @@ impl MainScreen {
             row![
                 button("Ajouter un compteur").on_press(MainScreenMessage::ChangeView(
                     crate::structs::app::Screen::AddRecorderScreen(AddRecorderScreen::new())
+                )),
+                button("Paramètres").on_press(MainScreenMessage::ChangeView(
+                    crate::structs::app::Screen::SettingsScreen(SettingsScreen::new())
                 ))
             ]
+            .padding(10)
+            .spacing(10)
         ]
         .into()
     }

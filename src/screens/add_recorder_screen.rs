@@ -5,7 +5,7 @@ use crate::structs::storage::Storage;
 use iced::{
     Color, Element, Length, Task,
     alignment::Alignment,
-    widget::{Text, button, column, container, row, text, text_input},
+    widget::{button, column, container, row, text, text_input},
 };
 #[derive(Debug, Clone)]
 pub enum AddRecorderMessage {
@@ -53,7 +53,7 @@ impl AddRecorderScreen {
             AddRecorderMessage::CancelAddCounter => Task::done(AddRecorderMessage::ChangeView(
                 Screen::MainScreen(MainScreen::new()),
             )),
-            AddRecorderMessage::ChangeView(screen) => Task::none(),
+            AddRecorderMessage::ChangeView(_) => Task::none(),
         }
     }
 
