@@ -1,6 +1,6 @@
 // src/structs/settings/settings.rs
 use super::game::{Game, GameConfig};
-use crate::i18n::language::Language;
+use crate::{i18n::language::Language, structs::storage::Storage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -66,6 +66,12 @@ impl Settings {
     }
     pub fn get_death_text(&self) -> &String {
         &self.death_text
+    }
+    pub fn load() -> Self {
+        Storage::load_settings().unwrap_or_default()
+    }
+    pub fn save(&self) {
+        Storage::save_settings(self);
     }
 }
 
