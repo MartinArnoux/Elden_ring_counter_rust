@@ -213,23 +213,27 @@ impl ListComponent {
             .filter(|(_, r)| !r.is_global());
 
         let global_elements = globals.map(|(_, recorder)| Self::view_global_recorder(recorder));
-
-        let classic_elements = classics.flat_map(|(index, recorder)| {
-            let is_dragging = self.dragging == Some(index);
+        let dragging_pos = self.dragging; // Option<usize> - maintenant c'est une position, pas un index
+        let classic_elements = classics.enumerate().flat_map(|(pos, (index, recorder))| {
+            let is_dragging = dragging_pos == Some(pos);
             let is_active = recorder.get_status_recorder();
+            let is_after_drag = dragging_pos
+                .map(|drag_pos| pos == drag_pos + 1)
+                .unwrap_or(false);
 
-            let drop_zone = (self.dragging.is_some() && !is_dragging).then(|| {
-                button(
-                    container(text("").size(1))
-                        .width(Length::Fill)
-                        .height(30)
-                        .style(crate::style::style::drop_zone_style),
-                )
-                .on_press(ListMessage::Drop(index))
-                .padding(0)
-                .style(crate::style::style::transparent_button_style)
-                .into()
-            });
+            let drop_zone =
+                (self.dragging.is_some() && !is_dragging && !is_after_drag).then(|| {
+                    button(
+                        container(text("").size(1))
+                            .width(Length::Fill)
+                            .height(30)
+                            .style(crate::style::style::drop_zone_style),
+                    )
+                    .on_press(ListMessage::Drop(index))
+                    .padding(0)
+                    .style(crate::style::style::transparent_button_style)
+                    .into()
+                });
 
             let recorder_element =
                 self.view_classic_recorder(recorder, index, is_dragging, is_active);

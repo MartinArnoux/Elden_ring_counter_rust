@@ -4,10 +4,16 @@ use super::recorder::Recorder;
 use super::settings::settings::Settings;
 use directories::ProjectDirs;
 use rusqlite::{Connection, Result as SqlResult};
-use std::path::PathBuf;
+use serde::Deserialize;
+use std::{fs, path::PathBuf};
 
 pub struct Storage;
 
+#[derive(Deserialize)]
+struct LegacyData {
+    recorders: Vec<Recorder>,
+    settings: Settings,
+}
 impl Storage {
     // Obtenir le chemin de la base de données
     fn get_db_path() -> Result<PathBuf, String> {
@@ -215,5 +221,98 @@ impl Storage {
             Ok(json) => serde_json::from_str(&json).map_err(|e| e.to_string()),
             Err(_) => Ok(Settings::default()),
         }
+    }
+
+    // Obtenir les chemins des anciens fichiers JSON
+    fn get_legacy_recorders_path() -> Result<PathBuf, String> {
+        let proj_dirs = ProjectDirs::from("", "", "DeathCompteur")
+            .ok_or_else(|| "Impossible de déterminer le répertoire de données".to_string())?;
+
+        Ok(proj_dirs.data_dir().join("recorders.json"))
+    }
+
+    fn get_legacy_settings_path() -> Result<PathBuf, String> {
+        let proj_dirs = ProjectDirs::from("", "", "DeathCompteur")
+            .ok_or_else(|| "Impossible de déterminer le répertoire de données".to_string())?;
+
+        Ok(proj_dirs.data_dir().join("settings.json"))
+    }
+
+    // Migrer les recorders
+    fn migrate_recorders() -> Result<bool, String> {
+        let json_path = Self::get_legacy_recorders_path()?;
+
+        if !json_path.exists() {
+            return Ok(false); // Pas de fichier à migrer
+        }
+
+        println!("Migration des recorders depuis {:?}...", json_path);
+
+        let json_content = fs::read_to_string(&json_path)
+            .map_err(|e| format!("Erreur lecture recorders.json: {}", e))?;
+
+        let recorders: Vec<Recorder> = serde_json::from_str(&json_content)
+            .map_err(|e| format!("Erreur parsing recorders.json: {}", e))?;
+
+        Self::save_recorders(&recorders)?;
+
+        // Backup
+        let backup_path = json_path.with_extension("json.backup");
+        fs::rename(&json_path, &backup_path)
+            .map_err(|e| format!("Erreur backup recorders: {}", e))?;
+
+        println!("✓ Recorders migrés ({} enregistrements)", recorders.len());
+        Ok(true)
+    }
+
+    // Migrer les settings
+    fn migrate_settings() -> Result<bool, String> {
+        let json_path = Self::get_legacy_settings_path()?;
+
+        if !json_path.exists() {
+            return Ok(false); // Pas de fichier à migrer
+        }
+
+        println!("Migration des settings depuis {:?}...", json_path);
+
+        let json_content = fs::read_to_string(&json_path)
+            .map_err(|e| format!("Erreur lecture settings.json: {}", e))?;
+
+        let settings: Settings = serde_json::from_str(&json_content)
+            .map_err(|e| format!("Erreur parsing settings.json: {}", e))?;
+
+        Self::save_settings(&settings)?;
+
+        // Backup
+        let backup_path = json_path.with_extension("json.backup");
+        fs::rename(&json_path, &backup_path)
+            .map_err(|e| format!("Erreur backup settings: {}", e))?;
+
+        println!("✓ Settings migrés");
+        Ok(true)
+    }
+
+    // Migration complète
+    pub fn migrate_from_json() -> Result<(), String> {
+        let recorders_migrated = Self::migrate_recorders()?;
+        let settings_migrated = Self::migrate_settings()?;
+
+        if recorders_migrated || settings_migrated {
+            println!("✓ Migration terminée avec succès !");
+        }
+
+        Ok(())
+    }
+
+    // Vérifier et exécuter la migration si nécessaire
+    pub fn ensure_migrated() -> Result<(), String> {
+        let db_path = Self::get_db_path()?;
+
+        // Si la DB n'existe pas, tenter la migration
+        if !db_path.exists() {
+            Self::migrate_from_json()?;
+        }
+
+        Ok(())
     }
 }
