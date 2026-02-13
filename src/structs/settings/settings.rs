@@ -82,7 +82,7 @@ impl Default for Settings {
             screen: 0,
             language: Language::French,
             custom_game_configs: HashMap::new(),
-            death_text: String::from("Vous avez péri"),
+            death_text: String::from("VOUS AVEZ PERI"),
         }
     }
 }

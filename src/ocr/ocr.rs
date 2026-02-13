@@ -77,8 +77,15 @@ pub async fn detect_death(
         lap!(_t0, "TOTAL detect_death");
         return Ok(true);
     }
+    lap!(
+        _t0,
+        format!(
+            "Death detected : score 1 : {} ; score 2 : {}",
+            score_v1, score_v2
+        )
+    );
 
-    if score_v1 > 35.0 && score_v2 > 35.0 {
+    if score_v1 > 80. || score_v2 > 80. {
         #[cfg(feature = "debug")]
         {
             lap!(_t0, "TOTAL detect_death");
@@ -139,7 +146,7 @@ fn is_death_text(text: &str, death_text: String) -> (bool, f64) {
         println!("Normalized text: {}", normalized);
         println!("Cleaned text: {}", cleaned2);
     }
-    let similarity = jaro_winkler(&cleaned2, death_text_str);
+    let similarity = jaro_winkler(&cleaned2, death_text_str) * 100.;
 
     let is_death =
         upper.contains(death_text_str) || cleaned2.contains(death_texte_no_space.as_str());

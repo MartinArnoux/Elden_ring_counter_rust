@@ -1,18 +1,16 @@
-use crate::hotkey::{GlobalHotkey, HotkeyError, Key, Modifier};
-use crate::screens::components::list::ListMessage;
-use crate::screens::main_screen::MainScreenMessage;
-use crate::structs::app::MessageApp;
+use crate::hotkey::{GlobalHotkey, HotkeyError, HotkeyMessage, Key, Modifier};
+
 use tokio::sync::mpsc::UnboundedSender;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[derive(Clone, Debug)]
 pub struct WindowsHotkey {
-    pub sender: UnboundedSender<MessageApp>,
+    pub sender: UnboundedSender<HotkeyMessage>,
 }
 
 impl WindowsHotkey {
-    pub fn new(sender: UnboundedSender<MessageApp>) -> Self {
+    pub fn new(sender: UnboundedSender<HotkeyMessage>) -> Self {
         Self { sender }
     }
 }
@@ -25,13 +23,13 @@ impl Default for WindowsHotkey {
 }
 
 impl GlobalHotkey for WindowsHotkey {
-    type Messages = UnboundedSender<MessageApp>;
+    type Messages = UnboundedSender<HotkeyMessage>;
 
     fn register(&self, mods: &[Modifier], key: Key) -> Result<(), HotkeyError> {
         let mut win_mods = HOT_KEY_MODIFIERS(0);
         for m in mods {
             match m {
-                Modifier::SHIFT => win_mods |= MOD_SHIFT,
+                Modifier::Alt => win_mods |= MOD_ALT,
             }
         }
 
@@ -60,17 +58,10 @@ impl GlobalHotkey for WindowsHotkey {
 
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 if msg.message == WM_HOTKEY {
-                    println!("Hotkey pressed!");
-
                     // Envoie le message via le channel tokio
                     // let _ = output
 
-                    if let Err(e) =
-                        self.sender
-                            .send(MessageApp::MainScreen(MainScreenMessage::List(
-                                ListMessage::Increment,
-                            )))
-                    {
+                    if let Err(e) = self.sender.send(HotkeyMessage::Increment) {
                         eprintln!("Failed to send hotkey message: {:?}", e);
                         break;
                     }
