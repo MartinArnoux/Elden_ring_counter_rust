@@ -3,8 +3,6 @@ use crate::ocr::ocr::{detect_death, get_boss_names};
 use crate::screens::components::list::ListMessage;
 use crate::screens::components::ocr::OcrMessage;
 use crate::screens::components::ocr::{ActionOCR, StatusOCR};
-use crate::screens::main_screen::MainScreenMessage;
-use crate::structs::app::MessageApp;
 
 use crate::structs::settings::game::GameConfig;
 use crate::utils::screen_capture::capture_full_screen;

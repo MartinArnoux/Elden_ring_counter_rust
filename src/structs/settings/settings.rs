@@ -37,9 +37,9 @@ impl Settings {
     }
 
     /// Définir une configuration personnalisée
-    pub fn set_custom_game_config(&mut self, game: Game, config: GameConfig) {
-        self.custom_game_configs.insert(game, config);
-    }
+    // pub fn set_custom_game_config(&mut self, game: Game, config: GameConfig) {
+    //     self.custom_game_configs.insert(game, config);
+    // }
 
     pub fn set_game(&mut self, game: Game) {
         self.game = game;
@@ -71,7 +71,7 @@ impl Settings {
         Storage::load_settings().unwrap_or_default()
     }
     pub fn save(&self) {
-        Storage::save_settings(self);
+        let _ = Storage::save_settings(self);
     }
 }
 

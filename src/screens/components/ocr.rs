@@ -1,16 +1,12 @@
-use std::{fmt, time::Duration};
+use std::fmt;
 
 use iced::{
-    Color, Subscription, Task,
+    Color, Element, Subscription, Task,
     widget::{column, row, text, toggler},
-    window::settings,
 };
-use strsim::normalized_levenshtein;
+use iced_aw::Spinner;
 
-use crate::{
-    structs::settings::settings::Settings,
-    utils::app_worker::{hotkey_subscription, ocr_subscription},
-};
+use crate::{structs::settings::settings::Settings, utils::app_worker::ocr_subscription};
 
 #[derive(Clone, Debug)]
 pub enum ActionOCR {
@@ -45,8 +41,12 @@ impl StatusOCR {
             StatusOCR::Stopped => Color::from_rgb(0.6, 0.6, 0.6),
         }
     }
-    pub fn show_spinner(&self) -> bool {
-        matches!(self, StatusOCR::Started(ActionOCR::SearchingBossName))
+    pub fn spinner_element(&self) -> Element<'_, OcrMessage> {
+        if matches!(self, StatusOCR::Started(ActionOCR::SearchingBossName)) {
+            Spinner::new().into()
+        } else {
+            text("").into()
+        }
     }
 }
 
@@ -134,7 +134,7 @@ impl OcrComponent {
         }
     }
 
-    pub fn view(&self) -> iced::Element<OcrMessage> {
+    pub fn view(&self) -> iced::Element<'_, OcrMessage> {
         column![
             row![
                 text("OCR Auto-détection :"),
@@ -142,9 +142,13 @@ impl OcrComponent {
             ]
             .spacing(10),
             // Texte du statut OCR avec couleur
-            text(self.ocr_status.to_string())
-                .color(self.ocr_status.color())
-                .size(16)
+            row![
+                text(self.ocr_status.to_string())
+                    .color(self.ocr_status.color())
+                    .size(16),
+                self.ocr_status.spinner_element()
+            ]
+            .spacing(10),
         ]
         .spacing(10)
         .into()

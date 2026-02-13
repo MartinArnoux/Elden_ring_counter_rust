@@ -4,16 +4,10 @@ use super::recorder::Recorder;
 use super::settings::settings::Settings;
 use directories::ProjectDirs;
 use rusqlite::{Connection, Result as SqlResult};
-use serde::Deserialize;
-use std::{fs, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf};
 
 pub struct Storage;
 
-#[derive(Deserialize)]
-struct LegacyData {
-    recorders: Vec<Recorder>,
-    settings: Settings,
-}
 impl Storage {
     // Obtenir le chemin de la base de données
     fn get_db_path() -> Result<PathBuf, String> {
@@ -67,39 +61,101 @@ impl Storage {
     // Recorders
     // -------------------------
 
-    pub fn save_recorders(recorders: &Vec<Recorder>) -> Result<(), String> {
-        let conn = Self::open()?;
+    pub fn save_all_recorders(
+        classic_recorders: &Vec<Recorder>,
+        global_recorders: &Vec<Recorder>,
+    ) -> Result<(), String> {
+        let mut conn = Self::open()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-        conn.execute("DELETE FROM recorders", [])
-            .map_err(|e| e.to_string())?;
+        // 1️⃣ Récupérer tous les UUIDs existants
+        let existing_uuids: HashSet<String> = {
+            let mut stmt = tx
+                .prepare("SELECT uuid FROM recorders")
+                .map_err(|e| e.to_string())?;
 
-        for (i, recorder) in recorders.iter().enumerate() {
-            conn.execute(
+            stmt.query_map([], |row| row.get(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+
+        // 2️⃣ Créer HashSet des UUIDs actuels
+        let current_uuids: HashSet<String> = classic_recorders
+            .iter()
+            .chain(global_recorders.iter())
+            .map(|r| r.get_uuid().to_string())
+            .collect();
+
+        // 3️⃣ Supprimer les recorders qui n'existent plus
+        for uuid in existing_uuids.difference(&current_uuids) {
+            tx.execute("DELETE FROM recorders WHERE uuid = ?1", [uuid])
+                .map_err(|e| e.to_string())?;
+        }
+
+        // 4️⃣ Sauvegarder les classics puis les globals
+        let mut position = 0;
+
+        for recorder in classic_recorders.iter() {
+            tx.execute(
                 "INSERT INTO recorders (uuid, title, counter, is_active, position, recorder_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(uuid) DO UPDATE SET
+                    title = excluded.title,
+                    counter = excluded.counter,
+                    is_active = excluded.is_active,
+                    position = excluded.position,
+                    recorder_type = excluded.recorder_type",
                 rusqlite::params![
                     recorder.get_uuid().to_string(),
                     recorder.get_title(),
                     recorder.get_counter(),
                     recorder.get_status_recorder() as i32,
-                    i as i32,
+                    position,
                     recorder.get_type().to_db_str()
                 ],
             )
             .map_err(|e| e.to_string())?;
+
+            position += 1;
         }
 
+        for recorder in global_recorders.iter() {
+            tx.execute(
+                "INSERT INTO recorders (uuid, title, counter, is_active, position, recorder_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(uuid) DO UPDATE SET
+                    title = excluded.title,
+                    counter = excluded.counter,
+                    is_active = excluded.is_active,
+                    position = excluded.position,
+                    recorder_type = excluded.recorder_type",
+                rusqlite::params![
+                    recorder.get_uuid().to_string(),
+                    recorder.get_title(),
+                    recorder.get_counter(),
+                    recorder.get_status_recorder() as i32,
+                    position,
+                    recorder.get_type().to_db_str()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+
+            position += 1;
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    pub fn load_recorders() -> Result<Vec<Recorder>, String> {
+    pub fn load_recorders() -> Result<(Vec<Recorder>, Vec<Recorder>), String> {
         let conn = Self::open()?;
 
         let mut stmt = conn
             .prepare("SELECT uuid, title, counter, is_active, recorder_type FROM recorders ORDER BY position ASC")
             .map_err(|e| e.to_string())?;
 
-        let recorders = stmt
+        let all_recorders: Vec<Recorder> = stmt
             .query_map([], |row| {
                 let uuid_str: String = row.get(0)?;
                 let title: String = row.get(1)?;
@@ -121,34 +177,21 @@ impl Storage {
             })
             .collect();
 
-        Ok(recorders)
+        // Séparer en deux Vec : classics et globals
+        let mut classic_recorders = Vec::new();
+        let mut global_recorders = Vec::new();
+
+        for recorder in all_recorders {
+            match recorder.get_type() {
+                RecorderType::Classic => classic_recorders.push(recorder),
+                RecorderType::GlobalDeaths => global_recorders.push(recorder),
+                RecorderType::GlobalBosses => global_recorders.push(recorder),
+            }
+        }
+
+        Ok((classic_recorders, global_recorders))
     }
 
-    pub fn save_recorder(recorder: &Recorder, position: usize) -> Result<(), String> {
-        let conn = Self::open()?;
-
-        conn.execute(
-            "INSERT INTO recorders (uuid, title, counter, is_active, position, recorder_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(uuid) DO UPDATE SET
-                title = excluded.title,
-                counter = excluded.counter,
-                is_active = excluded.is_active,
-                position = excluded.position,
-                recorder_type = excluded.recorder_type",
-            rusqlite::params![
-                recorder.get_uuid().to_string(),
-                recorder.get_title(),
-                recorder.get_counter(),
-                recorder.get_status_recorder() as i32,
-                position as i32,
-                recorder.get_type().clone().to_db_str()
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-
-        Ok(())
-    }
     pub fn insert_recorder_at_first_position(recorder: &Recorder) -> Result<(), String> {
         let mut conn = Self::open().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -183,13 +226,6 @@ impl Storage {
         Ok(())
     }
 
-    pub fn delete_recorder(uuid: &str) -> Result<(), String> {
-        let conn = Self::open()?;
-        conn.execute("DELETE FROM recorders WHERE uuid = ?1", [uuid])
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     // -------------------------
     // Settings
     // -------------------------
@@ -221,98 +257,5 @@ impl Storage {
             Ok(json) => serde_json::from_str(&json).map_err(|e| e.to_string()),
             Err(_) => Ok(Settings::default()),
         }
-    }
-
-    // Obtenir les chemins des anciens fichiers JSON
-    fn get_legacy_recorders_path() -> Result<PathBuf, String> {
-        let proj_dirs = ProjectDirs::from("", "", "DeathCompteur")
-            .ok_or_else(|| "Impossible de déterminer le répertoire de données".to_string())?;
-
-        Ok(proj_dirs.data_dir().join("recorders.json"))
-    }
-
-    fn get_legacy_settings_path() -> Result<PathBuf, String> {
-        let proj_dirs = ProjectDirs::from("", "", "DeathCompteur")
-            .ok_or_else(|| "Impossible de déterminer le répertoire de données".to_string())?;
-
-        Ok(proj_dirs.data_dir().join("settings.json"))
-    }
-
-    // Migrer les recorders
-    fn migrate_recorders() -> Result<bool, String> {
-        let json_path = Self::get_legacy_recorders_path()?;
-
-        if !json_path.exists() {
-            return Ok(false); // Pas de fichier à migrer
-        }
-
-        println!("Migration des recorders depuis {:?}...", json_path);
-
-        let json_content = fs::read_to_string(&json_path)
-            .map_err(|e| format!("Erreur lecture recorders.json: {}", e))?;
-
-        let recorders: Vec<Recorder> = serde_json::from_str(&json_content)
-            .map_err(|e| format!("Erreur parsing recorders.json: {}", e))?;
-
-        Self::save_recorders(&recorders)?;
-
-        // Backup
-        let backup_path = json_path.with_extension("json.backup");
-        fs::rename(&json_path, &backup_path)
-            .map_err(|e| format!("Erreur backup recorders: {}", e))?;
-
-        println!("✓ Recorders migrés ({} enregistrements)", recorders.len());
-        Ok(true)
-    }
-
-    // Migrer les settings
-    fn migrate_settings() -> Result<bool, String> {
-        let json_path = Self::get_legacy_settings_path()?;
-
-        if !json_path.exists() {
-            return Ok(false); // Pas de fichier à migrer
-        }
-
-        println!("Migration des settings depuis {:?}...", json_path);
-
-        let json_content = fs::read_to_string(&json_path)
-            .map_err(|e| format!("Erreur lecture settings.json: {}", e))?;
-
-        let settings: Settings = serde_json::from_str(&json_content)
-            .map_err(|e| format!("Erreur parsing settings.json: {}", e))?;
-
-        Self::save_settings(&settings)?;
-
-        // Backup
-        let backup_path = json_path.with_extension("json.backup");
-        fs::rename(&json_path, &backup_path)
-            .map_err(|e| format!("Erreur backup settings: {}", e))?;
-
-        println!("✓ Settings migrés");
-        Ok(true)
-    }
-
-    // Migration complète
-    pub fn migrate_from_json() -> Result<(), String> {
-        let recorders_migrated = Self::migrate_recorders()?;
-        let settings_migrated = Self::migrate_settings()?;
-
-        if recorders_migrated || settings_migrated {
-            println!("✓ Migration terminée avec succès !");
-        }
-
-        Ok(())
-    }
-
-    // Vérifier et exécuter la migration si nécessaire
-    pub fn ensure_migrated() -> Result<(), String> {
-        let db_path = Self::get_db_path()?;
-
-        // Si la DB n'existe pas, tenter la migration
-        if !db_path.exists() {
-            Self::migrate_from_json()?;
-        }
-
-        Ok(())
     }
 }

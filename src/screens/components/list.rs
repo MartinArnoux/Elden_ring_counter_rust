@@ -28,7 +28,6 @@ pub enum ListMessage {
     DeleteRecorder(uuid::Uuid),
     ToggleRecorder(uuid::Uuid),
 
-    Increment,
     AutosaveTick,
     OcrDeath(Vec<String>),
     HotKey(HotkeyMessage),
@@ -42,19 +41,18 @@ pub struct ListComponent {
     pub dragging: Option<usize>,
     pub edit_uuid: Option<uuid::Uuid>,
     pub edit_title: String,
-    pub edit_input_recorder_title: String,
-    pub edit_input_recorder_uuid: Option<Uuid>,
     pub recorders: Vec<Recorder>,
+    pub global_recorders: Vec<Recorder>,
     pub dirty: bool,
 }
 
 impl ListComponent {
     pub fn new() -> Self {
-        let mut recorders = {
+        let (recorders, mut global_recorders) = {
             #[cfg(feature = "no_save")]
             {
                 println!("🐛 Mode DEBUG activé - pas de chargement des données");
-                Vec::new()
+                (Vec::new(), Vec::new())
             }
 
             #[cfg(not(feature = "no_save"))]
@@ -62,15 +60,14 @@ impl ListComponent {
                 Storage::load_recorders().unwrap_or_default()
             }
         };
-        Self::ensure_global_counters(&mut recorders);
+        Self::ensure_global_counters(&mut global_recorders);
 
         Self {
             dragging: None,
             edit_uuid: None,
             edit_title: String::new(),
-            edit_input_recorder_title: String::new(),
-            edit_input_recorder_uuid: None,
             recorders,
+            global_recorders,
             dirty: false,
         }
     }
@@ -124,22 +121,12 @@ impl ListComponent {
                 Task::none()
             }
             ListMessage::CancelDrag => {
-                self.dragging = None;
+                self.cancel_drag();
                 Task::none()
             }
             ListMessage::Drop(target_index) => {
-                if let Some(source_index) = self.dragging {
-                    if source_index != target_index {
-                        let item = self.recorders.remove(source_index);
-                        let insert_at = if source_index < target_index {
-                            target_index - 1
-                        } else {
-                            target_index
-                        };
-                        self.recorders.insert(insert_at, item);
-                    }
-                    self.dragging = None;
-                }
+                self.drop(target_index);
+
                 Task::none()
             }
 
@@ -187,7 +174,6 @@ impl ListComponent {
                 Task::none()
             }
 
-            ListMessage::Increment => Task::none(),
             ListMessage::HotKey(message) => {
                 match message {
                     HotkeyMessage::Increment => {
@@ -200,23 +186,16 @@ impl ListComponent {
     }
 
     pub fn view<'a>(&'a self) -> Element<'a, ListMessage> {
-        let globals = self
-            .recorders
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.is_global());
+        let globals = self.global_recorders.iter().enumerate();
 
-        let classics = self
-            .recorders
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| !r.is_global());
+        let classics = self.recorders.iter().enumerate();
 
         let global_elements = globals.map(|(_, recorder)| Self::view_global_recorder(recorder));
         let dragging_pos = self.dragging; // Option<usize> - maintenant c'est une position, pas un index
         let classic_elements = classics.enumerate().flat_map(|(pos, (index, recorder))| {
             let is_dragging = dragging_pos == Some(pos);
             let is_active = recorder.get_status_recorder();
+
             let is_after_drag = dragging_pos
                 .map(|drag_pos| pos == drag_pos + 1)
                 .unwrap_or(false);
@@ -398,12 +377,20 @@ impl ListComponent {
         if let Some(pos) = self.recorders.iter().position(|r| *r.get_uuid() == uuid) {
             self.recorders[pos].increment();
         }
+        if let Some(pos) = self
+            .global_recorders
+            .iter()
+            .position(|r| *r.get_uuid() == uuid)
+        {
+            self.global_recorders[pos].increment();
+        }
     }
 
     fn increment_active_recorders(&mut self) {
         for recorder in self.recorders.iter_mut() {
             recorder.increment();
         }
+        self.global_recorders.iter_mut().for_each(|r| r.increment());
         self.dirty();
     }
 
@@ -411,21 +398,34 @@ impl ListComponent {
         if let Some(counter) = self.recorders.iter_mut().find(|r| *r.get_uuid() == uuid) {
             counter.force_decrement();
         }
-    }
-    pub fn increment_global_deaths(&mut self) {
-        if let Some(global) = self.recorders.iter_mut().find(|r| r.is_global_deaths()) {
-            global.increment();
+        if let Some(counter) = self
+            .global_recorders
+            .iter_mut()
+            .find(|r| *r.get_uuid() == uuid)
+        {
+            counter.force_decrement();
         }
     }
-    fn update_all_counter(&mut self) {
-        for recorder in self.recorders.iter_mut() {
-            recorder.increment();
+    pub fn increment_global_deaths(&mut self) {
+        if let Some(global) = self
+            .global_recorders
+            .iter_mut()
+            .find(|r| r.is_global_deaths())
+        {
+            global.increment();
         }
     }
 
     fn reset_recorder(&mut self, uuid: Uuid) {
         if let Some(counter) = self.recorders.iter_mut().find(|r| *r.get_uuid() == uuid) {
             counter.reset();
+        }
+        if let Some(global) = self
+            .global_recorders
+            .iter_mut()
+            .find(|r| r.is_global_deaths())
+        {
+            global.reset();
         }
     }
 
@@ -436,7 +436,11 @@ impl ListComponent {
     }
 
     pub fn increment_global_bosses(&mut self) {
-        if let Some(global) = self.recorders.iter_mut().find(|r| r.is_global_bosses()) {
+        if let Some(global) = self
+            .global_recorders
+            .iter_mut()
+            .find(|r| r.is_global_bosses())
+        {
             global.increment();
         }
     }
@@ -446,8 +450,9 @@ impl ListComponent {
     }
 
     fn drop(&mut self, index: usize) {
-        if let Some(dragging) = self.dragging.take() {
-            self.move_recorder(dragging, index);
+        if let Some(source_index) = self.dragging {
+            self.move_recorder(source_index, index);
+            self.dragging = None;
         }
     }
 
@@ -457,8 +462,10 @@ impl ListComponent {
 
     fn move_recorder(&mut self, source: usize, target: usize) {
         if source != target {
-            let recorder = self.recorders.remove(source);
-            self.recorders.insert(target, recorder);
+            let item = self.recorders.remove(source);
+            let insert_at = if source < target { target - 1 } else { target };
+            self.recorders.insert(insert_at, item);
+            self.dirty();
         }
     }
 
@@ -468,7 +475,7 @@ impl ListComponent {
 
     pub fn save(&self) {
         if self.is_dirty() {
-            let _ = Storage::save_recorders(&self.recorders);
+            let _ = Storage::save_all_recorders(&self.recorders, &self.global_recorders);
         }
     }
 
@@ -492,18 +499,17 @@ impl ListComponent {
     fn handle_boss_death(&mut self, boss_name: String) {
         println!("⚔️  Mort contre : {}", boss_name);
 
-        let global_count = self.recorders.iter().filter(|r| r.is_global()).count();
         let normalized_boss = boss_name.trim().to_uppercase();
 
         // 1. Chercher correspondance exacte d'abord
         if let Some(pos) = self
             .recorders
             .iter()
-            .position(|r| r.is_classic() && r.get_title().to_uppercase() == normalized_boss)
+            .position(|r| r.get_title().to_uppercase() == normalized_boss)
         {
             let mut recorder = self.recorders.remove(pos);
             recorder.increment();
-            self.recorders.insert(global_count, recorder);
+            self.recorders.insert(0, recorder); // Insérer en première position
             println!("✅ Compteur '{}' incrémenté (match exact)", boss_name);
         } else {
             // 2. Pas de match exact, chercher une similarité
@@ -517,10 +523,9 @@ impl ListComponent {
                         existing_name,
                         (similarity * 100.0) as u32
                     );
-
                     let mut recorder = self.recorders.remove(pos);
                     recorder.increment();
-                    self.recorders.insert(global_count, recorder);
+                    self.recorders.insert(0, recorder);
                     println!(
                         "✅ Compteur '{}' incrémenté (match similaire)",
                         existing_name
@@ -530,11 +535,13 @@ impl ListComponent {
                     // 3. Pas de match similaire : créer nouveau compteur
                     let mut new_recorder = Recorder::new(boss_name.clone());
                     new_recorder.force_increment();
-                    self.recorders.insert(global_count, new_recorder);
+                    self.recorders.insert(0, new_recorder);
                     println!("✅ Nouveau compteur '{}' créé", boss_name);
                 }
             }
         }
+
+        self.dirty = true;
     }
     fn find_similar_boss(&self, boss_name: &str, threshold: f64) -> Option<(usize, f64, String)> {
         let mut best_match: Option<(usize, f64, String)> = None;

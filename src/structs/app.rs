@@ -1,19 +1,14 @@
-use super::settings::settings::Settings;
-use super::storage::Storage;
-use crate::i18n::translations::I18n;
 use crate::screens::add_recorder_screen::{AddRecorderMessage, AddRecorderScreen};
 use crate::screens::main_screen::{MainScreen, MainScreenMessage};
 use crate::screens::settings_screen::{SettingsScreen, SettingsScreenMessage};
 use iced::task::Task;
-use iced::{Element, Subscription, time::Duration};
+use iced::{Element, Subscription};
 
 #[derive(Clone, Debug)]
 pub enum MessageApp {
     MainScreen(MainScreenMessage),
     AddRecorderScreen(AddRecorderMessage),
     SettingsScreen(SettingsScreenMessage),
-    ChangeView(Screen),
-    AutosaveTick,
 }
 
 #[derive(Clone, Debug)]
@@ -31,21 +26,13 @@ impl Default for Screen {
 
 #[derive(Clone)]
 pub struct App {
-    settings: Settings,
-    i18n: I18n,
     screen: Screen,
-    dirty: bool,
 }
 
 impl App {
     pub fn new() -> App {
-        let settings = Storage::load_settings().unwrap_or_default();
-        let i18n = I18n::new(settings.get_language().clone());
         App {
             screen: Screen::MainScreen(MainScreen::new()),
-            dirty: false,
-            settings,
-            i18n,
         }
     }
 
@@ -104,16 +91,6 @@ impl App {
                     _ => Task::none(),
                 },
             },
-
-            MessageApp::ChangeView(screen) => {
-                self.screen = screen;
-                Task::none()
-            }
-
-            MessageApp::AutosaveTick => {
-                self.save();
-                Task::none()
-            }
         }
     }
 
@@ -144,17 +121,6 @@ impl App {
                 .subscription()
                 .map(MessageApp::SettingsScreen),
         }
-    }
-
-    fn dirty(&mut self) -> () {
-        self.dirty = true;
-    }
-
-    pub fn add_recorder(&mut self, title: String) -> () {
-        // if self.recorders_exist(title.clone()) {
-        //     return;
-        // }
-        //self.recorders.push(Recorder::new(title));
     }
 
     fn save(&self) {

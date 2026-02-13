@@ -18,12 +18,8 @@ mod structs;
 mod style;
 mod utils;
 use crate::structs::app::App;
-use crate::structs::storage::Storage;
 
 fn main() -> iced::Result {
-    if let Err(e) = Storage::ensure_migrated() {
-        eprintln!("Erreur migration: {}", e);
-    }
     iced::application(App::new, App::update, App::view)
         .subscription(App::subscription)
         .window(window::Settings {

@@ -57,7 +57,7 @@ impl AddRecorderScreen {
         }
     }
 
-    pub fn view(&self) -> Element<AddRecorderMessage> {
+    pub fn view(&self) -> Element<'_, AddRecorderMessage> {
         container(
             column![
                 text("Ajouter un enregistreur").size(28),

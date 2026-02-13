@@ -91,13 +91,6 @@ impl Recorder {
         &self.recorder_type
     }
 
-    pub fn is_global(&self) -> bool {
-        matches!(
-            self.recorder_type,
-            RecorderType::GlobalDeaths | RecorderType::GlobalBosses
-        )
-    }
-
     pub fn is_global_deaths(&self) -> bool {
         self.recorder_type == RecorderType::GlobalDeaths
     }

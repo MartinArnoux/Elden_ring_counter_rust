@@ -1,26 +1,13 @@
-use std::time::Duration;
-
 use crate::screens::add_recorder_screen::AddRecorderScreen;
 use crate::screens::components::list::{ListComponent, ListMessage};
 use crate::screens::components::ocr::{OcrComponent, OcrMessage};
 use crate::screens::settings_screen::SettingsScreen;
-use crate::structs::app::{MessageApp, Screen};
-use crate::structs::recorder::Recorder;
-use crate::structs::settings::settings::Settings;
-use crate::structs::storage::Storage;
-use crate::utils::app_worker::hotkey_subscription;
-use iced::border::width;
-use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler};
-use iced::{Color, Element, Length, Subscription, Task};
-use strsim::normalized_levenshtein;
-use uuid::Uuid;
+use crate::structs::app::Screen;
+use iced::widget::{button, column, row};
+use iced::{Element, Length, Subscription, Task};
 // -------------------------------------------------------
 // Messages propres à la vue List
 // -------------------------------------------------------
-#[derive(Debug, Clone)]
-pub enum MainScreenComponents {
-    List(ListComponent),
-}
 
 #[derive(Debug, Clone)]
 pub enum MainScreenMessage {
@@ -36,7 +23,6 @@ pub enum MainScreenMessage {
 pub struct MainScreen {
     list: ListComponent,
     ocr: OcrComponent,
-    settings: Settings,
 }
 
 impl MainScreen {
@@ -44,7 +30,6 @@ impl MainScreen {
         Self {
             list: ListComponent::new(),
             ocr: OcrComponent::new(),
-            settings: Settings::load(),
         }
     }
 
