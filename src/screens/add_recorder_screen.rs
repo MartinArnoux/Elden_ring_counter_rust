@@ -3,7 +3,7 @@ use crate::structs::app::Screen;
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
 use iced::{
-    Color, Element, Length, Task,
+    Color, Element, Length, Subscription, Task,
     alignment::Alignment,
     widget::{button, column, container, row, text, text_input},
 };
@@ -93,5 +93,9 @@ impl AddRecorderScreen {
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
+    }
+
+    pub fn subscription(&self) -> Subscription<AddRecorderMessage> {
+        Subscription::none()
     }
 }

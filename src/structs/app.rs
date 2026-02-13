@@ -4,7 +4,6 @@ use crate::i18n::translations::I18n;
 use crate::screens::add_recorder_screen::{AddRecorderMessage, AddRecorderScreen};
 use crate::screens::main_screen::{MainScreen, MainScreenMessage};
 use crate::screens::settings_screen::{SettingsScreen, SettingsScreenMessage};
-use crate::utils::app_worker::{hotkey_subscription, ocr_subscription};
 use iced::task::Task;
 use iced::{Element, Subscription, time::Duration};
 
@@ -45,8 +44,6 @@ impl App {
         App {
             screen: Screen::MainScreen(MainScreen::new()),
             dirty: false,
-            ocr_activate: false,
-            ocr_status: StatusOCR::Stopped,
             settings,
             i18n,
         }
@@ -117,32 +114,6 @@ impl App {
                 self.save();
                 Task::none()
             }
-
-            MessageApp::ActivateOCR(b) => {
-                self.ocr_activate = b;
-                if !self.ocr_activate {
-                    self.ocr_status = StatusOCR::Stopped;
-                    println!("🤖 OCR stopped !");
-                }
-                Task::none()
-            }
-
-            MessageApp::StartingOCR => {
-                self.ocr_status = StatusOCR::Starting;
-                println!("🤖 OCR starting !");
-                Task::none()
-            }
-            MessageApp::OCROK => {
-                self.ocr_status = StatusOCR::Started(ActionOCR::SearchingDeath);
-                println!("🤖 OCR started !");
-                Task::none()
-            }
-
-            MessageApp::ChangeActionOCR(status) => {
-                println!("🤖 OCR status changed to {:?}", status);
-                self.ocr_status = StatusOCR::Started(status);
-                Task::none()
-            }
         }
     }
 
@@ -160,22 +131,19 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<MessageApp> {
-        let autosave = iced::time::every(Duration::from_secs(10)).map(|_| MessageApp::AutosaveTick);
+        match &self.screen {
+            Screen::MainScreen(main_screen) => {
+                main_screen.subscription().map(MessageApp::MainScreen)
+            }
 
-        let hotkey_sub = hotkey_subscription();
+            Screen::AddRecorderScreen(add_recorder_screen) => add_recorder_screen
+                .subscription()
+                .map(MessageApp::AddRecorderScreen),
 
-        // ✅ Conditionnellement créer la subscription OCR
-        let ocr_sub = if self.ocr_activate {
-            ocr_subscription(
-                self.settings.get_screen(),
-                self.settings.get_game_config(),
-                self.settings.get_death_text().clone(),
-            )
-        } else {
-            Subscription::none()
-        };
-
-        Subscription::batch(vec![autosave, hotkey_sub, ocr_sub])
+            Screen::SettingsScreen(settings_screen) => settings_screen
+                .subscription()
+                .map(MessageApp::SettingsScreen),
+        }
     }
 
     fn dirty(&mut self) -> () {

@@ -1,9 +1,12 @@
+use crate::hotkey::HotkeyMessage;
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
+use crate::utils::app_worker::hotkey_subscription;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler};
-use iced::{Color, Element, Length, Task};
+use iced::{Color, Element, Length, Subscription, Task, time::Duration};
 use strsim::normalized_levenshtein;
 use uuid::Uuid;
+
 // -------------------------------------------------------
 // Messages propres à la vue List
 // -------------------------------------------------------
@@ -24,9 +27,11 @@ pub enum ListMessage {
     // Suppression / toggle
     DeleteRecorder(uuid::Uuid),
     ToggleRecorder(uuid::Uuid),
-    EndEditingRecorderTitle(Uuid),
-    StartEditingRecorderTitle(Uuid),
+
     Increment,
+    AutosaveTick,
+    OcrDeath(Vec<String>),
+    HotKey(HotkeyMessage),
 }
 
 // -------------------------------------------------------
@@ -89,9 +94,33 @@ impl ListComponent {
 
     pub fn update(&mut self, message: ListMessage) -> Task<ListMessage> {
         match message {
+            ListMessage::OcrDeath(bosses) => {
+                self.increment_global_deaths();
+
+                if bosses.is_empty() {
+                    return Task::none();
+                }
+                self.increment_global_bosses();
+                let bosses_names: String = bosses
+                    .into_iter()
+                    .filter(|b| !b.trim().is_empty())
+                    .map(|b| b.trim().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" - ");
+
+                if !bosses_names.is_empty() {
+                    self.handle_boss_death(bosses_names);
+                }
+                self.dirty();
+                Task::none()
+            }
+            ListMessage::AutosaveTick => {
+                self.save();
+                Task::none()
+            }
             // --- Drag & Drop ---
             ListMessage::StartDrag(index) => {
-                self.dragging = Some(index);
+                self.start_drag(index);
                 Task::none()
             }
             ListMessage::CancelDrag => {
@@ -143,6 +172,8 @@ impl ListComponent {
             // --- Edition titre ---
             ListMessage::StartEditingTitle(uuid) => {
                 self.edit_uuid = Some(uuid);
+                self.edit_title = self.get_title(uuid);
+                self.dirty();
                 Task::none()
             }
             ListMessage::UpdateTitle(value) => {
@@ -150,94 +181,98 @@ impl ListComponent {
                 Task::none()
             }
             ListMessage::EndEditingTitle(uuid) => {
-                let new_title = self.edit_title.clone();
+                self.set_title(uuid, self.edit_title.clone());
                 self.edit_uuid = None;
                 self.edit_title.clear();
                 Task::none()
             }
 
-            ListMessage::EndEditingRecorderTitle(uuid) => {
-                if let Some(recorder) = self.recorders.iter_mut().find(|r| r.get_uuid() == &uuid) {
-                    recorder.set_title(self.edit_input_recorder_title.clone());
-                    self.edit_input_recorder_uuid = None;
-                    self.edit_input_recorder_title.clear();
-                    self.dirty();
-                }
-                Task::none()
-            }
-            ListMessage::StartEditingRecorderTitle(uuid) => {
-                if let Some(recorder) = self.recorders.iter().find(|r| r.get_uuid() == &uuid) {
-                    self.edit_input_recorder_uuid = Some(uuid);
-                    self.edit_input_recorder_title = recorder.get_title().to_string();
-                }
-                Task::none()
-            }
             ListMessage::Increment => Task::none(),
+            ListMessage::HotKey(message) => {
+                match message {
+                    HotkeyMessage::Increment => {
+                        self.increment_active_recorders();
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
     pub fn view<'a>(&'a self) -> Element<'a, ListMessage> {
-        let mut list = column![].spacing(10);
-
-        // Séparer les recorders
-        let globals: Vec<_> = self
+        let globals = self
             .recorders
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.is_global())
-            .collect();
+            .filter(|(_, r)| r.is_global());
 
-        let classics: Vec<_> = self
+        let classics = self
             .recorders
             .iter()
             .enumerate()
-            .filter(|(_, r)| !r.is_global())
-            .collect();
+            .filter(|(_, r)| !r.is_global());
 
-        // --- 1️⃣ Afficher les globaux en premier ---
-        for (_, recorder) in globals {
-            list = list.push(Self::view_global_recorder(recorder));
-        }
+        let global_elements = globals.map(|(_, recorder)| Self::view_global_recorder(recorder));
 
-        // --- 2️⃣ Afficher les classiques ---
-        for (index, recorder) in classics {
+        let classic_elements = classics.flat_map(|(index, recorder)| {
             let is_dragging = self.dragging == Some(index);
             let is_active = recorder.get_status_recorder();
 
-            // Zone de drop
-            if self.dragging.is_some() && !is_dragging {
-                let drop_zone = container(text("").size(1))
+            let drop_zone = (self.dragging.is_some() && !is_dragging).then(|| {
+                button(
+                    container(text("").size(1))
+                        .width(Length::Fill)
+                        .height(30)
+                        .style(crate::style::style::drop_zone_style),
+                )
+                .on_press(ListMessage::Drop(index))
+                .padding(0)
+                .style(crate::style::style::transparent_button_style)
+                .into()
+            });
+
+            let recorder_element =
+                self.view_classic_recorder(recorder, index, is_dragging, is_active);
+
+            drop_zone
+                .into_iter()
+                .chain(std::iter::once(recorder_element))
+        });
+
+        let final_drop_zone = self.dragging.map(|_| {
+            button(
+                container(text("").size(1))
                     .width(Length::Fill)
                     .height(30)
-                    .style(crate::style::style::drop_zone_style);
+                    .style(crate::style::style::drop_zone_style),
+            )
+            .on_press(ListMessage::Drop(self.recorders.len()))
+            .padding(0)
+            .style(crate::style::style::transparent_button_style)
+            .into()
+        });
 
-                let drop_button = button(drop_zone)
-                    .on_press(ListMessage::Drop(index))
-                    .padding(0)
-                    .style(crate::style::style::transparent_button_style);
+        let content = column(
+            global_elements
+                .chain(classic_elements)
+                .chain(final_drop_zone.into_iter())
+                .collect::<Vec<_>>(),
+        )
+        .spacing(10)
+        .width(Length::Fill);
 
-                list = list.push(drop_button);
-            }
+        scrollable(content).height(Length::Fill).into()
+    }
 
-            list = list.push(self.view_classic_recorder(recorder, index, is_dragging, is_active));
-        }
+    pub fn subscription(&self) -> Subscription<ListMessage> {
+        let autosave =
+            iced::time::every(Duration::from_secs(10)).map(|_| ListMessage::AutosaveTick);
 
-        // Drop zone finale
-        if self.dragging.is_some() {
-            let drop_zone = container(text("").size(1))
-                .width(Length::Fill)
-                .height(30)
-                .style(crate::style::style::drop_zone_style);
+        let hotkey_sub = hotkey_subscription();
 
-            let drop_button = button(drop_zone)
-                .on_press(ListMessage::Drop(self.recorders.len()))
-                .padding(0)
-                .style(crate::style::style::transparent_button_style);
+        let subscription = Subscription::batch(vec![autosave, hotkey_sub]);
 
-            list = list.push(drop_button);
-        }
-
-        scrollable(list).height(Length::Fill).into()
+        subscription
     }
 
     // --- Vue d'un compteur global ---
@@ -361,6 +396,13 @@ impl ListComponent {
         }
     }
 
+    fn increment_active_recorders(&mut self) {
+        for recorder in self.recorders.iter_mut() {
+            recorder.increment();
+        }
+        self.dirty();
+    }
+
     fn decrement_recorder(&mut self, uuid: Uuid) {
         if let Some(counter) = self.recorders.iter_mut().find(|r| *r.get_uuid() == uuid) {
             counter.force_decrement();
@@ -416,7 +458,103 @@ impl ListComponent {
         }
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     pub fn save(&self) {
-        let _ = Storage::save_recorders(&self.recorders);
+        if self.is_dirty() {
+            let _ = Storage::save_recorders(&self.recorders);
+        }
+    }
+
+    pub fn get_title(&self, uuid: Uuid) -> String {
+        self.recorders
+            .iter()
+            .find(|r| *r.get_uuid() == uuid)
+            .map(|r| r.get_title().clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_title(&mut self, uuid: Uuid, title: String) {
+        if let Some(pos) = self.recorders.iter().position(|r| *r.get_uuid() == uuid) {
+            let mut recorder = self.recorders.remove(pos);
+            recorder.set_title(title);
+            self.recorders.insert(pos, recorder);
+            self.dirty = true;
+        }
+    }
+
+    fn handle_boss_death(&mut self, boss_name: String) {
+        println!("⚔️  Mort contre : {}", boss_name);
+
+        let global_count = self.recorders.iter().filter(|r| r.is_global()).count();
+        let normalized_boss = boss_name.trim().to_uppercase();
+
+        // 1. Chercher correspondance exacte d'abord
+        if let Some(pos) = self
+            .recorders
+            .iter()
+            .position(|r| r.is_classic() && r.get_title().to_uppercase() == normalized_boss)
+        {
+            let mut recorder = self.recorders.remove(pos);
+            recorder.increment();
+            self.recorders.insert(global_count, recorder);
+            println!("✅ Compteur '{}' incrémenté (match exact)", boss_name);
+        } else {
+            // 2. Pas de match exact, chercher une similarité
+            let similar = self.find_similar_boss(&normalized_boss, 0.80);
+
+            match similar {
+                Some((pos, similarity, existing_name)) => {
+                    println!(
+                        "🔍 Boss similaire trouvé: '{}' ~= '{}' ({}% similaire)",
+                        normalized_boss,
+                        existing_name,
+                        (similarity * 100.0) as u32
+                    );
+
+                    let mut recorder = self.recorders.remove(pos);
+                    recorder.increment();
+                    self.recorders.insert(global_count, recorder);
+                    println!(
+                        "✅ Compteur '{}' incrémenté (match similaire)",
+                        existing_name
+                    );
+                }
+                None => {
+                    // 3. Pas de match similaire : créer nouveau compteur
+                    let mut new_recorder = Recorder::new(boss_name.clone());
+                    new_recorder.force_increment();
+                    self.recorders.insert(global_count, new_recorder);
+                    println!("✅ Nouveau compteur '{}' créé", boss_name);
+                }
+            }
+        }
+    }
+    fn find_similar_boss(&self, boss_name: &str, threshold: f64) -> Option<(usize, f64, String)> {
+        let mut best_match: Option<(usize, f64, String)> = None;
+
+        for (i, recorder) in self.recorders.iter().enumerate() {
+            if !recorder.is_classic() {
+                continue; // Ignorer les globaux
+            }
+
+            let existing_name = recorder.get_title().to_uppercase();
+            let similarity = normalized_levenshtein(boss_name, &existing_name);
+
+            // Garder le meilleur match si au-dessus du seuil
+            if similarity >= threshold {
+                if let Some((_, best_score, _)) = &best_match {
+                    if similarity > *best_score {
+                        best_match = Some((i, similarity, recorder.get_title().to_string()));
+                    }
+                } else {
+                    best_match = Some((i, similarity, recorder.get_title().to_string()));
+                }
+            }
+        }
+
+        best_match
     }
 }

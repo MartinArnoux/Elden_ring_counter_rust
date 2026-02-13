@@ -11,9 +11,11 @@ use crate::{
     },
 };
 
-use iced::widget::{Column, PickList, Row, button, pick_list, text_input};
-use iced::{Element, Length, Task};
-use iced_core::widget::Text;
+use iced::{Alignment, Element, Length, Task};
+use iced::{
+    Subscription,
+    widget::{PickList, button, column, container, pick_list, row, text, text_input},
+};
 
 #[derive(Debug, Clone)]
 pub enum SettingsScreenMessage {
@@ -71,68 +73,68 @@ impl SettingsScreen {
     }
 
     pub fn view(&self) -> Element<'_, SettingsScreenMessage> {
-        let mut content = Column::new()
-            .spacing(10)
-            .padding(20)
-            .width(Length::Fill)
-            .push(Text::new("Paramètres").size(30));
+        let label_width = 120;
+        let spacing_item = 15;
+        let form = column![
+            container(text("Paramètres").size(32))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            row![
+                text("Game:").width(label_width),
+                pick_list(
+                    ALL_GAMES,
+                    Some(self.settings.get_game()),
+                    SettingsScreenMessage::GameSelected,
+                )
+                .width(Length::Fill)
+            ]
+            .align_y(Alignment::Center)
+            .spacing(spacing_item),
+            row![
+                text("Langue:").width(label_width),
+                pick_list(
+                    ALL_LANGUAGES,
+                    Some(self.settings.get_language()),
+                    SettingsScreenMessage::LanguageSelected,
+                )
+                .width(Length::Fill)
+            ]
+            .align_y(Alignment::Center)
+            .spacing(spacing_item),
+            row![
+                text("Écran:").width(label_width),
+                PickList::new(
+                    self.screens_list.as_slice(),
+                    self.screens_list
+                        .iter()
+                        .find(|s| s.index == self.settings.get_screen())
+                        .cloned(),
+                    SettingsScreenMessage::ScreenSelected,
+                )
+                .width(Length::Fill)
+            ]
+            .align_y(Alignment::Center)
+            .spacing(spacing_item),
+            row![
+                text("Death texte:").width(label_width),
+                text_input("Death texte", &self.settings.get_death_text())
+                    .on_input(SettingsScreenMessage::DeathText)
+                    .width(Length::Fill)
+            ]
+            .align_y(Alignment::Center)
+            .spacing(spacing_item),
+            button("Enregistrer")
+                .on_press(SettingsScreenMessage::SaveSettings)
+                .width(Length::Fill)
+        ]
+        .spacing(20)
+        .max_width(500);
 
-        // Valeur sélectionnée (Option<Game>)
-        let selected_game = Some(self.settings.get_game());
+        container(form).center_x(Length::Fill).padding(30).into()
+    }
 
-        let game_pick_list = pick_list(
-            ALL_GAMES,
-            selected_game,
-            SettingsScreenMessage::GameSelected,
-        );
-
-        let game_row = Row::new()
-            .spacing(10)
-            .push(Text::new("Game:"))
-            .push(game_pick_list);
-
-        // On garde tes autres éléments
-
-        let select_language = pick_list(
-            ALL_LANGUAGES,                           // &[Language]
-            Some(self.settings.get_language()),      // Option<Language>
-            SettingsScreenMessage::LanguageSelected, // fn(Language) -> Message
-        );
-
-        let language_row = Row::new()
-            .spacing(10)
-            .push(Text::new("Langue:"))
-            .push(select_language);
-
-        let selected_screen = self
-            .screens_list
-            .iter()
-            .find(|s| s.index == self.settings.get_screen())
-            .cloned();
-
-        let screen_pick_list = PickList::new(
-            self.screens_list.as_slice(), // ✅ IMPORTANT
-            selected_screen,
-            SettingsScreenMessage::ScreenSelected,
-        );
-
-        let screen_row = Row::new()
-            .spacing(10)
-            .push(Text::new("Écran:"))
-            .push(screen_pick_list);
-
-        let death_text_input = text_input("Death texte", &self.settings.get_death_text())
-            .on_input(SettingsScreenMessage::DeathText);
-        let button_save = button("Enregistrer").on_press(SettingsScreenMessage::SaveSettings);
-
-        content = content
-            .push(game_row)
-            .push(language_row)
-            .push(screen_row)
-            .push(death_text_input)
-            .push(button_save);
-
-        content.into()
+    pub fn subscription(&self) -> Subscription<SettingsScreenMessage> {
+        Subscription::none()
     }
 
     pub fn set_language(&mut self, language: Language) {

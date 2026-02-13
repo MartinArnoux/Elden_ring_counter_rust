@@ -1,7 +1,11 @@
 use crate::hotkey::{GlobalHotkey, Key, Modifier, WindowsHotkey};
 use crate::ocr::ocr::{detect_death, get_boss_names};
+use crate::screens::components::list::ListMessage;
+use crate::screens::components::ocr::OcrMessage;
+use crate::screens::components::ocr::{ActionOCR, StatusOCR};
 use crate::screens::main_screen::MainScreenMessage;
-use crate::structs::app::{ActionOCR, MessageApp};
+use crate::structs::app::MessageApp;
+
 use crate::structs::settings::game::GameConfig;
 use crate::utils::screen_capture::capture_full_screen;
 use iced::Subscription;
@@ -13,7 +17,7 @@ use tokio::task::yield_now;
 use tokio::sync::mpsc::unbounded_channel;
 
 //SUBSCRIPTIONS
-pub fn hotkey_subscription() -> Subscription<MessageApp> {
+pub fn hotkey_subscription() -> Subscription<ListMessage> {
     Subscription::run(hotkey_worker)
 }
 
@@ -21,7 +25,7 @@ pub fn ocr_subscription(
     screen: i8,
     game_config: GameConfig,
     death_text: String,
-) -> Subscription<MessageApp> {
+) -> Subscription<OcrMessage> {
     Subscription::run_with(
         (screen, game_config.clone(), death_text),
         move |(screen, game_config, death_text)| {
@@ -43,12 +47,12 @@ pub fn ocr_subscription(
 // Pourquoi 2 channels ?
 // - tokio::mpsc : Thread sync ne peut pas utiliser stream::channel directement
 // - stream::channel : Protocole Iced, crée un Stream avec lifecycle management
-pub fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
+pub fn hotkey_worker() -> impl iced::futures::Stream<Item = ListMessage> {
     use iced::futures::sink::SinkExt;
 
     stream::channel(
         100,
-        |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
+        |mut output: iced::futures::channel::mpsc::Sender<ListMessage>| async move {
             println!("🎧 Démarrage du hotkey worker...");
 
             // Créer le channel tokio pour recevoir les MessageApp du thread Windows
@@ -58,8 +62,8 @@ pub fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
             spawn(move || {
                 let hotkey_manager = WindowsHotkey::new(hotkey_tx);
 
-                match hotkey_manager.register(&[Modifier::SHIFT], Key::Plus) {
-                    Ok(_) => println!("✅ Hotkey Ctrl+Plus registered"),
+                match hotkey_manager.register(&[Modifier::Alt], Key::Plus) {
+                    Ok(_) => println!("✅ Hotkey SHIFT+Plus registered"),
                     Err(e) => eprintln!("❌ Register failed: {:?}", e),
                 }
 
@@ -72,8 +76,7 @@ pub fn hotkey_worker() -> impl iced::futures::Stream<Item = MessageApp> {
                 match hotkey_rx.recv().await {
                     Some(msg) => {
                         // Le message est déjà un MessageApp::Increment, on le transfère tel quel
-                        println!("📨 Message reçu du thread Windows : {:?}", msg);
-                        let _ = output.send(msg).await;
+                        let _ = output.send(ListMessage::HotKey(msg)).await;
                     }
                     None => {
                         println!("❌ Channel hotkey fermé");
@@ -91,20 +94,23 @@ pub fn ocr_worker(
     screen: i8,
     game_config: GameConfig,
     death_text: String,
-) -> impl iced::futures::Stream<Item = MessageApp> {
+) -> impl iced::futures::Stream<Item = OcrMessage> {
     use iced::futures::sink::SinkExt;
 
     stream::channel(
         100,
-        move |mut output: iced::futures::channel::mpsc::Sender<MessageApp>| async move {
+        move |mut output: iced::futures::channel::mpsc::Sender<OcrMessage>| async move {
             println!("🎧 Démarrage du OCR worker (détection mort)...");
 
-            let _ = output.send(MessageApp::StartingOCR).await;
+            let _ = output.send(OcrMessage::ActivateOCR(true)).await;
             //tokio::time::sleep(Duration::from_secs(3)).await;
 
             let mut last_death_time = Instant::now();
-
-            let _ = output.send(MessageApp::OCROK).await;
+            let _ = output
+                .send(OcrMessage::ChangeActionOCR(StatusOCR::Started(
+                    ActionOCR::SearchingDeath,
+                )))
+                .await;
             let mut start = true;
             let target_interval = Duration::from_millis(500); // 500ms = 2 scans/seconde
             let target_sleep_after_death = Duration::from_secs(10);
@@ -115,7 +121,9 @@ pub fn ocr_worker(
                 let mut found_death = false;
                 if let ActionOCR::EndingAction = status {
                     let _ = output
-                        .send(MessageApp::ChangeActionOCR(ActionOCR::SearchingDeath))
+                        .send(OcrMessage::ChangeActionOCR(StatusOCR::Started(
+                            ActionOCR::SearchingDeath,
+                        )))
                         .await;
                     status = ActionOCR::SearchingDeath;
                 }
@@ -145,11 +153,11 @@ pub fn ocr_worker(
 
                             // 🔥 SEND STATE CHANGE IMMEDIATELY
                             let _ = output
-                                .send(MessageApp::ChangeActionOCR(ActionOCR::SearchingBossName))
+                                .send(OcrMessage::ChangeActionOCR(StatusOCR::Started(
+                                    ActionOCR::SearchingBossName,
+                                )))
                                 .await;
-                            let _ = output
-                                .send(MessageApp::MainScreen(MainScreenMessage::DeathDetected))
-                                .await;
+                            let _ = output.send(OcrMessage::DeathDetected).await;
                             // 🔑 allow UI/state reducer to run NOW
                             yield_now().await;
 
@@ -168,23 +176,21 @@ pub fn ocr_worker(
                                         println!("⚔️ Boss trouvés : {:?}", bosses);
 
                                         let _ = output_clone
-                                            .send(MessageApp::MainScreen(
-                                                MainScreenMessage::BossesFoundOCR(bosses),
-                                            ))
+                                            .send(OcrMessage::BossesFoundOCR(bosses))
                                             .await;
                                     }
                                     Err(e) => {
                                         eprintln!("❌ Erreur détection boss : {}", e);
                                         let _ = output_clone
-                                            .send(MessageApp::MainScreen(
-                                                MainScreenMessage::BossesFoundOCR(vec![]),
-                                            ))
+                                            .send(OcrMessage::BossesFoundOCR(vec![]))
                                             .await;
                                     }
                                 }
 
                                 let _ = output_clone
-                                    .send(MessageApp::ChangeActionOCR(ActionOCR::EndingAction))
+                                    .send(OcrMessage::ChangeActionOCR(StatusOCR::Started(
+                                        ActionOCR::EndingAction,
+                                    )))
                                     .await;
                             });
                             match handler.await {

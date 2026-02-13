@@ -5,7 +5,7 @@ pub use windows::WindowsHotkey;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Modifier {
-    SHIFT,
+    Alt,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -16,6 +16,11 @@ pub enum Key {
 #[derive(Debug)]
 pub enum HotkeyError {
     RegistrationFailed,
+}
+
+#[derive(Debug, Clone)]
+pub enum HotkeyMessage {
+    Increment,
 }
 
 pub trait GlobalHotkey: Clone {

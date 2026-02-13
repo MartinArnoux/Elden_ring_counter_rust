@@ -1,4 +1,4 @@
-use crate::structs::app::{ActionOCR, StatusOCR};
+use crate::screens::components::ocr::{ActionOCR, StatusOCR};
 
 use super::language::Language;
 #[derive(Debug, Clone)]
