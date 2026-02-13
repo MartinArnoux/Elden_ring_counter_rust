@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-pub const ALL_LANGUAGES: &[Language] = &[Language::French];
+pub const ALL_LANGUAGES: &[Language] = &[Language::French, Language::English];
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Language {
     French,
@@ -22,11 +22,5 @@ impl PartialEq for Language {
             (Language::English, Language::English) => true,
             _ => false,
         }
-    }
-}
-
-impl Language {
-    pub fn all() -> &'static [Language] {
-        &[Language::French, Language::English]
     }
 }

@@ -1,3 +1,4 @@
+use crate::i18n::translations::{GeneralKey, I18n};
 use crate::screens::add_recorder_screen::AddRecorderScreen;
 use crate::screens::components::list::{ListComponent, ListMessage};
 use crate::screens::components::ocr::{OcrComponent, OcrMessage};
@@ -48,15 +49,17 @@ impl MainScreen {
         }
     }
 
-    pub fn view<'a>(&'a self) -> Element<'a, MainScreenMessage> {
+    pub fn view<'a>(&'a self, i18n: &'a I18n) -> Element<'a, MainScreenMessage> {
         column![
-            self.ocr.view().map(MainScreenMessage::Ocr),
-            self.list.view().map(MainScreenMessage::List),
+            self.ocr.view(i18n).map(MainScreenMessage::Ocr),
+            self.list.view(i18n).map(MainScreenMessage::List),
             row![
-                button("Ajouter un compteur").on_press(MainScreenMessage::ChangeView(
-                    crate::structs::app::Screen::AddRecorderScreen(AddRecorderScreen::new())
-                )),
-                button("Paramètres").on_press(MainScreenMessage::ChangeView(
+                button(i18n.general(GeneralKey::AddRecorder)).on_press(
+                    MainScreenMessage::ChangeView(crate::structs::app::Screen::AddRecorderScreen(
+                        AddRecorderScreen::new()
+                    ))
+                ),
+                button(i18n.general(GeneralKey::Settings)).on_press(MainScreenMessage::ChangeView(
                     crate::structs::app::Screen::SettingsScreen(SettingsScreen::new())
                 ))
             ]

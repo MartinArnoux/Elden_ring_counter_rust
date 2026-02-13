@@ -1,5 +1,9 @@
 use crate::{
-    i18n::{Language, language::ALL_LANGUAGES},
+    i18n::{
+        Language,
+        language::ALL_LANGUAGES,
+        translations::{GeneralKey, I18n, SettingsKey},
+    },
     screens::main_screen::MainScreen,
     structs::{
         app::Screen,
@@ -24,7 +28,7 @@ pub enum SettingsScreenMessage {
     LanguageSelected(Language),
     ScreenSelected(ScreenInfo),
     DeathText(String),
-
+    ChangeLanguageI18n(Language),
     ChangeView(Screen),
 }
 
@@ -52,13 +56,14 @@ impl SettingsScreen {
                     MainScreen::new(),
                 )))
             }
+            SettingsScreenMessage::ChangeLanguageI18n(_) => Task::none(),
             SettingsScreenMessage::GameSelected(game) => {
                 self.settings.set_game(game);
                 Task::none()
             }
             SettingsScreenMessage::LanguageSelected(language) => {
-                self.set_language(language);
-                Task::none()
+                self.set_language(language.clone());
+                Task::done(SettingsScreenMessage::ChangeLanguageI18n(language))
             }
             SettingsScreenMessage::ScreenSelected(screen) => {
                 self.settings.set_screen(screen.index);
@@ -72,15 +77,15 @@ impl SettingsScreen {
         }
     }
 
-    pub fn view(&self) -> Element<'_, SettingsScreenMessage> {
+    pub fn view(&self, i18n: &I18n) -> Element<'_, SettingsScreenMessage> {
         let label_width = 120;
         let spacing_item = 15;
         let form = column![
-            container(text("Paramètres").size(32))
+            container(text(i18n.general(GeneralKey::Settings)).size(32))
                 .width(Length::Fill)
                 .center_x(Length::Fill),
             row![
-                text("Game:").width(label_width),
+                text(i18n.settings(SettingsKey::Game)).width(label_width),
                 pick_list(
                     ALL_GAMES,
                     Some(self.settings.get_game()),
@@ -91,7 +96,7 @@ impl SettingsScreen {
             .align_y(Alignment::Center)
             .spacing(spacing_item),
             row![
-                text("Langue:").width(label_width),
+                text(i18n.settings(SettingsKey::Language)).width(label_width),
                 pick_list(
                     ALL_LANGUAGES,
                     Some(self.settings.get_language()),
@@ -102,7 +107,7 @@ impl SettingsScreen {
             .align_y(Alignment::Center)
             .spacing(spacing_item),
             row![
-                text("Écran:").width(label_width),
+                text(format!("{}", i18n.settings(SettingsKey::Screen))).width(label_width),
                 PickList::new(
                     self.screens_list.as_slice(),
                     self.screens_list
@@ -116,14 +121,17 @@ impl SettingsScreen {
             .align_y(Alignment::Center)
             .spacing(spacing_item),
             row![
-                text("Death texte:").width(label_width),
-                text_input("Death texte", &self.settings.get_death_text())
-                    .on_input(SettingsScreenMessage::DeathText)
-                    .width(Length::Fill)
+                text(i18n.settings(SettingsKey::DeathText)).width(label_width),
+                text_input(
+                    i18n.settings(SettingsKey::DeathTextInput),
+                    &self.settings.get_death_text()
+                )
+                .on_input(SettingsScreenMessage::DeathText)
+                .width(Length::Fill)
             ]
             .align_y(Alignment::Center)
             .spacing(spacing_item),
-            button("Enregistrer")
+            button(i18n.general(GeneralKey::Save))
                 .on_press(SettingsScreenMessage::SaveSettings)
                 .width(Length::Fill)
         ]

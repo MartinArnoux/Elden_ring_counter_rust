@@ -6,7 +6,11 @@ use iced::{
 };
 use iced_aw::Spinner;
 
-use crate::{structs::settings::settings::Settings, utils::app_worker::ocr_subscription};
+use crate::{
+    i18n::translations::{I18n, OcrKey},
+    structs::settings::settings::Settings,
+    utils::app_worker::ocr_subscription,
+};
 
 #[derive(Clone, Debug)]
 pub enum ActionOCR {
@@ -16,10 +20,11 @@ pub enum ActionOCR {
 }
 impl fmt::Display for ActionOCR {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i18n = I18n::load();
         let text = match self {
-            ActionOCR::SearchingDeath => "Recherche de ta mort... ça arrive",
-            ActionOCR::SearchingBossName => "Recherche du nom du boss...",
-            ActionOCR::EndingAction => "OCR démarré - sleeping a bit",
+            ActionOCR::SearchingDeath => i18n.ocr(OcrKey::SearchingDeath),
+            ActionOCR::SearchingBossName => i18n.ocr(OcrKey::SearchingBossName),
+            ActionOCR::EndingAction => i18n.ocr(OcrKey::EndingAction),
         };
 
         write!(f, "{text}")
@@ -52,10 +57,12 @@ impl StatusOCR {
 
 impl fmt::Display for StatusOCR {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i18n = I18n::load();
+
         let text = match self {
-            StatusOCR::Starting => "Démarrage...",
+            StatusOCR::Starting => i18n.ocr(OcrKey::Starting),
             StatusOCR::Started(action) => return write!(f, "{action}"),
-            StatusOCR::Stopped => "OCR arrêté",
+            StatusOCR::Stopped => i18n.ocr(OcrKey::Stopped),
         };
 
         write!(f, "{text}")
@@ -134,10 +141,10 @@ impl OcrComponent {
         }
     }
 
-    pub fn view(&self) -> iced::Element<'_, OcrMessage> {
+    pub fn view(&self, i18n: &I18n) -> iced::Element<'_, OcrMessage> {
         column![
             row![
-                text("OCR Auto-détection :"),
+                text(i18n.ocr(OcrKey::AutoDetection)),
                 toggler(self.ocr_activate).on_toggle(OcrMessage::ActivateOCR)
             ]
             .spacing(10),
