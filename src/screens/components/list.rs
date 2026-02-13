@@ -1,7 +1,9 @@
 use crate::hotkey::HotkeyMessage;
+use crate::i18n::translations::GeneralKey;
+use crate::i18n::translations::I18n;
+use crate::i18n::translations::ListKey;
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
-use crate::utils::app_worker::hotkey_subscription;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler};
 use iced::{Color, Element, Length, Subscription, Task, time::Duration};
 use strsim::normalized_levenshtein;
@@ -185,12 +187,13 @@ impl ListComponent {
         }
     }
 
-    pub fn view<'a>(&'a self) -> Element<'a, ListMessage> {
+    pub fn view<'a>(&'a self, i18n: &'a I18n) -> Element<'a, ListMessage> {
         let globals = self.global_recorders.iter().enumerate();
 
         let classics = self.recorders.iter().enumerate();
 
-        let global_elements = globals.map(|(_, recorder)| Self::view_global_recorder(recorder));
+        let global_elements =
+            globals.map(|(_, recorder)| Self::view_global_recorder(recorder, i18n));
         let dragging_pos = self.dragging; // Option<usize> - maintenant c'est une position, pas un index
         let classic_elements = classics.enumerate().flat_map(|(pos, (index, recorder))| {
             let is_dragging = dragging_pos == Some(pos);
@@ -215,7 +218,7 @@ impl ListComponent {
                 });
 
             let recorder_element =
-                self.view_classic_recorder(recorder, index, is_dragging, is_active);
+                self.view_classic_recorder(recorder, index, is_dragging, is_active, i18n);
 
             drop_zone
                 .into_iter()
@@ -251,25 +254,34 @@ impl ListComponent {
         let autosave =
             iced::time::every(Duration::from_secs(10)).map(|_| ListMessage::AutosaveTick);
 
-        let hotkey_sub = hotkey_subscription();
-
-        let subscription = Subscription::batch(vec![autosave, hotkey_sub]);
+        let subscription = Subscription::batch(vec![autosave]);
 
         subscription
     }
 
     // --- Vue d'un compteur global ---
-    fn view_global_recorder(recorder: &Recorder) -> Element<'_, ListMessage> {
+    fn view_global_recorder<'a>(
+        recorder: &'a Recorder,
+        i18n: &'a I18n,
+    ) -> Element<'a, ListMessage> {
         let uuid = recorder.get_uuid();
-        let (icon, color) = if recorder.is_global_deaths() {
-            ("💀", Color::from_rgb(0.9, 0.3, 0.3))
+        let (icon, title, color) = if recorder.is_global_deaths() {
+            (
+                "💀",
+                i18n.list(ListKey::TitleGlobalDeaths),
+                Color::from_rgb(0.9, 0.3, 0.3),
+            )
         } else {
-            ("⚔️", Color::from_rgb(0.9, 0.6, 0.2))
+            (
+                "⚔️",
+                i18n.list(ListKey::TitleGlobalCounter),
+                Color::from_rgb(0.9, 0.6, 0.2),
+            )
         };
 
         let global_row = row![
             text(icon).size(30),
-            text(recorder.get_title())
+            text(title)
                 .size(22)
                 .width(Length::Fill)
                 .style(move |_theme| text::Style { color: Some(color) }),
@@ -303,12 +315,13 @@ impl ListComponent {
         index: usize,
         is_dragging: bool,
         is_active: bool,
+        i18n: &I18n,
     ) -> Element<'a, ListMessage> {
         let uuid = recorder.get_uuid();
         let is_editing = self.edit_uuid == Some(*uuid);
 
         let title_widget: Element<ListMessage> = if is_editing {
-            text_input("Titre", &self.edit_title)
+            text_input(i18n.list(ListKey::InputTextPlaceholder), &self.edit_title)
                 .on_input(ListMessage::UpdateTitle)
                 .on_submit(ListMessage::EndEditingTitle(*uuid))
                 .width(Length::Fill)
@@ -339,7 +352,7 @@ impl ListComponent {
             button("+").on_press(ListMessage::IncrementRecorder(*uuid)),
             text(recorder.get_counter().to_string()).size(20),
             toggler(is_active).on_toggle(move |_| ListMessage::ToggleRecorder(*uuid)),
-            button("Supprimer").on_press(ListMessage::DeleteRecorder(*uuid))
+            button(i18n.general(GeneralKey::Delete)).on_press(ListMessage::DeleteRecorder(*uuid))
         ]
         .spacing(20);
 

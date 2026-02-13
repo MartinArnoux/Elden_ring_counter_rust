@@ -1,7 +1,8 @@
-use crate::screens::main_screen::MainScreen;
+use crate::i18n::translations::AddRecorderKey;
 use crate::structs::app::Screen;
 use crate::structs::recorder::Recorder;
 use crate::structs::storage::Storage;
+use crate::{i18n::translations::I18n, screens::main_screen::MainScreen};
 use iced::{
     Color, Element, Length, Subscription, Task,
     alignment::Alignment,
@@ -57,15 +58,18 @@ impl AddRecorderScreen {
         }
     }
 
-    pub fn view(&self) -> Element<'_, AddRecorderMessage> {
+    pub fn view(&self, i18n: &I18n) -> Element<'_, AddRecorderMessage> {
         container(
             column![
-                text("Ajouter un enregistreur").size(28),
-                text_input("Titre", &self.title)
-                    .on_input(AddRecorderMessage::TitleChanged)
-                    .on_submit(AddRecorderMessage::AddCounter)
-                    .padding(10)
-                    .size(16),
+                text(i18n.add_recorder(AddRecorderKey::Title)).size(28),
+                text_input(
+                    i18n.add_recorder(AddRecorderKey::InputPlaceholder),
+                    &self.title
+                )
+                .on_input(AddRecorderMessage::TitleChanged)
+                .on_submit(AddRecorderMessage::AddCounter)
+                .padding(10)
+                .size(16),
                 // ✅ message d'erreur inline
                 if let Some(error) = &self.error {
                     text(error).size(14).color(Color::from_rgb(0.8, 0.0, 0.0))
@@ -73,11 +77,13 @@ impl AddRecorderScreen {
                     text("").into() // ← Utilisez text("") au lieu de column![]
                 },
                 row![
-                    button("Annuler").on_press(AddRecorderMessage::CancelAddCounter),
+                    button(i18n.add_recorder(AddRecorderKey::Cancel))
+                        .on_press(AddRecorderMessage::CancelAddCounter),
                     if self.title.trim().is_empty() {
-                        button("Ajouter")
+                        button(i18n.add_recorder(AddRecorderKey::AddCounter))
                     } else {
-                        button("Ajouter").on_press(AddRecorderMessage::AddCounter)
+                        button(i18n.add_recorder(AddRecorderKey::AddCounter))
+                            .on_press(AddRecorderMessage::AddCounter)
                     }
                 ]
                 .spacing(10)

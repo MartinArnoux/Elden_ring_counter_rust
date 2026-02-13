@@ -1,6 +1,8 @@
+use crate::i18n::translations::I18n;
 use crate::screens::add_recorder_screen::{AddRecorderMessage, AddRecorderScreen};
 use crate::screens::main_screen::{MainScreen, MainScreenMessage};
 use crate::screens::settings_screen::{SettingsScreen, SettingsScreenMessage};
+use crate::utils::app_worker::hotkey_subscription;
 use iced::task::Task;
 use iced::{Element, Subscription};
 
@@ -27,12 +29,14 @@ impl Default for Screen {
 #[derive(Clone)]
 pub struct App {
     screen: Screen,
+    i18n: I18n,
 }
 
 impl App {
     pub fn new() -> App {
         App {
             screen: Screen::MainScreen(MainScreen::new()),
+            i18n: I18n::load(),
         }
     }
 
@@ -82,6 +86,11 @@ impl App {
             MessageApp::SettingsScreen(settings_screen_message) => match settings_screen_message {
                 SettingsScreenMessage::ChangeView(screen) => {
                     self.go_to(screen);
+                    self.i18n = I18n::load();
+                    Task::none()
+                }
+                SettingsScreenMessage::ChangeLanguageI18n(language) => {
+                    self.i18n.set_language(language);
                     Task::none()
                 }
                 _ => match &mut self.screen {
@@ -96,19 +105,25 @@ impl App {
 
     pub fn view(&self) -> Element<'_, MessageApp> {
         let main = match &self.screen {
-            Screen::MainScreen(main_screen) => main_screen.view().map(MessageApp::MainScreen),
-            Screen::AddRecorderScreen(add_recorder_screen) => add_recorder_screen
-                .view()
-                .map(MessageApp::AddRecorderScreen),
-            Screen::SettingsScreen(settings_screen) => {
-                settings_screen.view().map(MessageApp::SettingsScreen)
+            Screen::MainScreen(main_screen) => {
+                main_screen.view(&self.i18n).map(MessageApp::MainScreen)
             }
+            Screen::AddRecorderScreen(add_recorder_screen) => add_recorder_screen
+                .view(&self.i18n)
+                .map(MessageApp::AddRecorderScreen),
+            Screen::SettingsScreen(settings_screen) => settings_screen
+                .view(&self.i18n)
+                .map(MessageApp::SettingsScreen),
         };
         main
     }
 
     pub fn subscription(&self) -> Subscription<MessageApp> {
-        match &self.screen {
+        let hotkey_sub = hotkey_subscription()
+            .map(MainScreenMessage::List)
+            .map(MessageApp::MainScreen);
+
+        let sub = match &self.screen {
             Screen::MainScreen(main_screen) => {
                 main_screen.subscription().map(MessageApp::MainScreen)
             }
@@ -120,7 +135,9 @@ impl App {
             Screen::SettingsScreen(settings_screen) => settings_screen
                 .subscription()
                 .map(MessageApp::SettingsScreen),
-        }
+        };
+
+        Subscription::batch(vec![hotkey_sub, sub])
     }
 
     fn save(&self) {
