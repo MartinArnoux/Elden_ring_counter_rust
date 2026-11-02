@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 #[macro_export]
 macro_rules! lap {
     ($start:expr, $label:expr) => {{
